@@ -1,0 +1,10 @@
+package-name: microsoft
+name: microsoft
+description: Microsoft provider for the DS Business Workflow
+
+linked_services:
+  - name: MICROSOFT_SQL_LINKED_SERVICE
+    kind: DS.RESOURCE.LINKED_SERVICE.MICROSOFT_SQL
+    version: 1.0.0
+    description: Microsoft SQL Server linked service
+    class_name: ds_provider_microsoft_py_lib.linked_service.MssqlLinkedService

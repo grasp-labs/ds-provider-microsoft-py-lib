@@ -1,0 +1,23 @@
+"""
+**File:** ``enums.py``
+**Region:** ``ds_provider_microsoft_py_lib/enums``
+
+Constants for Microsoft provider.
+
+Example:
+    >>> ResourceType.MICROSOFT_SQL_LINKED_SERVICE
+    'DS.RESOURCE.LINKED_SERVICE.MICROSOFT_SQL'
+    >>> ResourceType.MICROSOFT_SQL_DATASET
+    'DS.RESOURCE.DATASET.MICROSOFT_SQL'
+"""
+
+from enum import StrEnum
+
+
+class ResourceType(StrEnum):
+    """
+    Constants definitions for Azure provider.
+    """
+
+    MICROSOFT_SQL_LINKED_SERVICE = "DS.RESOURCE.LINKED_SERVICE.MICROSOFT_SQ"
+    MICROSOFT_SQL_DATASET = "DS.RESOURCE.DATASET.MICROSOFT_SQL"

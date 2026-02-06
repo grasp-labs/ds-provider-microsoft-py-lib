@@ -6,7 +6,12 @@ build-backend = "setuptools.build_meta"
 name = "ds-provider-microsoft-py-lib"
 version = "0.1.0-alpha.1"
 description = "A Python package from the DS library collection"
-dependencies = []
+dependencies = [
+    "ds-resource-plugin-py-lib>=0.1.0-beta.1,<1.0.0",
+    "ds-common-logger-py-lib>=0.1.0-alpha.5,<1.0.0",
+    "pyodbc==5.3.0",
+    "sqlalchemy==2.0.46"
+]
 requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE-APACHE"]
@@ -66,7 +71,7 @@ docs = [
 include-package-data = true
 
 [tool.setuptools.package-data]
-ds_provider_microsoft_py_lib = ["py.typed"]
+ds_provider_microsoft_py_lib = ["resource.yaml", "py.typed"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

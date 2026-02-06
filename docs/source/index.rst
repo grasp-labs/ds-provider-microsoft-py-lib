@@ -1,4 +1,4 @@
-Welcome to {{PROJECT_NAME}}'s documentation!
+Welcome to ds-provider-microsoft-py-lib's documentation!
 =============================================
 
 .. toctree::

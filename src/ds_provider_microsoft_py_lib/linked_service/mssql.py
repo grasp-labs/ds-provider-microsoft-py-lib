@@ -70,7 +70,7 @@ class MssqlLinkedService(LinkedService[MssqlLinkedServiceSettingsType], Generic[
     """
 
     settings: MssqlLinkedServiceSettingsType
-    _engine: Engine = field(init=False)
+    _engine: Engine
 
     def check_settings_is_set(self) -> None:
         """
@@ -148,7 +148,7 @@ class MssqlLinkedService(LinkedService[MssqlLinkedServiceSettingsType], Generic[
             None
         """
         self.check_settings_is_set()
-        self._engine = self._create_engine()
+        self._engine: Engine = self._create_engine()
         logger.debug("Connected to Azure StorageAccount.")
 
     def test_connection(self) -> tuple[bool, str]:

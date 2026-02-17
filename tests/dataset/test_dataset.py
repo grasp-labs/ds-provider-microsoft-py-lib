@@ -1,0 +1,264 @@
+from __future__ import annotations
+
+from unittest.mock import MagicMock, patch
+
+import pandas as pd
+import pytest
+from ds_resource_plugin_py_lib.common.resource.dataset.errors import DeleteError, ReadError
+
+from ds_provider_microsoft_py_lib.dataset.mssql import (
+    DeleteSettings,
+    MssqlTable,
+    MssqlTableDatasetSettings,
+)
+from ds_provider_microsoft_py_lib.enums import ResourceType
+
+
+@pytest.fixture()
+def settings() -> MssqlTableDatasetSettings:
+    return MssqlTableDatasetSettings(table_name="mytable", schema_name="myschema", chunksize=2, delete=DeleteSettings())
+
+
+@pytest.fixture()
+def linked_service() -> MagicMock:
+    engine = MagicMock()
+    engine.dialect.identifier_preparer.quote = MagicMock(side_effect=lambda name: f"[{name}]")
+    svc = MagicMock()
+    svc.engine = engine
+    return svc
+
+
+def make_table(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> MssqlTable:
+    table = MssqlTable.__new__(MssqlTable)
+    table.settings = settings
+    table.linked_service = linked_service
+    table.serializer = MagicMock()
+    table.deserializer = MagicMock()
+    table._fallback_insert = MagicMock()
+    table._log_write_start = MagicMock()
+    table.input = None
+    table.output = None
+    return table
+
+
+def test_type_and_full_table_name(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """Verify resource type and full table name composition."""
+
+    table = make_table(settings, linked_service)
+
+    assert table.type == ResourceType.MICROSOFT_SQL_DATASET
+    assert table._get_full_table_name() == "myschema.mytable"
+
+
+def test_quote_identifier_uses_preparer(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """Ensure identifier quoting uses the dialect preparer."""
+
+    table = make_table(settings, linked_service)
+    quoted = table._quote_identifier("col")
+
+    linked_service.engine.dialect.identifier_preparer.quote.assert_called_once_with("col")
+    assert quoted == "[col]"
+
+
+def test_quote_identifier_rejects_unsafe(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """Reject unsafe identifier input."""
+
+    table = make_table(settings, linked_service)
+
+    with pytest.raises(ValueError):
+        table._quote_identifier("bad;col")
+
+
+def test_qualified_table_composes_schema_and_table(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """Compose qualified table name from schema and table."""
+
+    table = make_table(settings, linked_service)
+    with patch.object(table, "_quote_identifier", side_effect=["[schema]", "[table]"]):
+        assert table._qualified_table() == "[schema].[table]"
+
+
+def test_read_success(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """Read returns a dataframe and sets output."""
+
+    table = make_table(settings, linked_service)
+    df = pd.DataFrame({"a": [1]})
+
+    with patch("ds_provider_microsoft_py_lib.dataset.mssql.pd.read_sql_table", return_value=df) as read_sql_table:
+        table.read()
+
+    read_sql_table.assert_called_once_with(
+        table_name=settings.table_name,
+        con=linked_service.engine,
+        schema=settings.schema_name,
+    )
+    assert isinstance(table.output, pd.DataFrame)
+    assert list(table.output["a"]) == [1]
+
+
+def test_read_value_error_maps_to_read_error(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """Map ValueError from read to ReadError with404 status."""
+    table = make_table(settings, linked_service)
+
+    with (
+        patch("ds_provider_microsoft_py_lib.dataset.mssql.pd.read_sql_table", side_effect=ValueError("missing")),
+        pytest.raises(ReadError) as exc,
+    ):
+        table.read()
+
+    assert exc.value.status_code == 404
+
+
+def test_read_other_errors_wrapped(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """Wrap unexpected read errors in ReadError."""
+
+    table = make_table(settings, linked_service)
+    with (
+        patch("ds_provider_microsoft_py_lib.dataset.mssql.pd.read_sql_table", side_effect=RuntimeError("boom")),
+        pytest.raises(ReadError),
+    ):
+        table.read()
+
+
+def test_create_uses_fast_executemany_and_skips_fallback(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """Use fast executemany path when available."""
+
+    table = make_table(settings, linked_service)
+    table.input = pd.DataFrame({"col": [1, 2]})
+
+    df_clean = MagicMock()
+    df_clean.columns = ["col"]
+    head_df = MagicMock()
+    df_clean.head.return_value = head_df
+    table.serializer.return_value = (df_clean, [(1,), (2,)])
+
+    inspector = MagicMock()
+    inspector.has_table.return_value = False
+    raw_conn = MagicMock()
+    cursor = MagicMock()
+    raw_conn.cursor.return_value = cursor
+    linked_service.engine.raw_connection.return_value = raw_conn
+
+    with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=inspector):
+        table.create()
+
+    inspector.has_table.assert_called_once_with(settings.table_name, schema=settings.schema_name)
+    head_df.to_sql.assert_called_once()
+    cursor.executemany.assert_called_once()
+    raw_conn.commit.assert_called_once()
+    raw_conn.close.assert_called_once()
+    table._fallback_insert.assert_not_called()
+
+
+def test_create_falls_back_when_fast_path_fails(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """Fallback to slow insert path when fast path fails."""
+
+    table = make_table(settings, linked_service)
+    table.input = pd.DataFrame({"col": [1]})
+
+    df_clean = MagicMock()
+    df_clean.columns = ["col"]
+    table.serializer.return_value = (df_clean, [(1,)])
+
+    inspector = MagicMock()
+    inspector.has_table.return_value = True
+    linked_service.engine.raw_connection.side_effect = RuntimeError("no raw conn")
+
+    with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=inspector):
+        table.create()
+
+    table._fallback_insert.assert_called_once_with(df_clean, settings.chunksize)
+
+
+def test_update_delegates_to_create(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """Delegate update calls to create."""
+    table = make_table(settings, linked_service)
+
+    with patch.object(table, "create") as create_mock:
+        table.update(example=1)
+
+    create_mock.assert_called_once_with(example=1)
+
+
+def test_delete_table_path_executes_drop(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """Execute DROP TABLE when delete_table is True."""
+    settings.delete.delete_table = True
+    table = make_table(settings, linked_service)
+
+    with patch.object(table, "_qualified_table", return_value="quoted_table"):
+        conn = MagicMock()
+        conn_cm = MagicMock(__enter__=MagicMock(return_value=conn), __exit__=MagicMock(return_value=None))
+        linked_service.engine.connect.return_value = conn_cm
+
+        with patch("ds_provider_microsoft_py_lib.dataset.mssql.text", side_effect=lambda q: f"text:{q}") as text_mock:
+            table.delete()
+
+    text_mock.assert_called_once_with("DROP TABLE IF EXISTS quoted_table")
+    conn.execute.assert_called_once_with("text:DROP TABLE IF EXISTS quoted_table")
+    conn.commit.assert_called_once()
+
+
+def test_delete_table_path_wraps_errors(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """Wrap errors from DROP TABLE in DeleteError."""
+    settings.delete.delete_table = True
+    table = make_table(settings, linked_service)
+
+    with patch.object(table, "_qualified_table", return_value="quoted_table"):
+        linked_service.engine.connect.side_effect = RuntimeError("boom")
+        with pytest.raises(DeleteError):
+            table.delete()
+
+
+def test_delete_requires_input_when_not_dropping_table(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """Require input dataframe for delete when delete_table is False."""
+    settings.delete.delete_table = False
+    table = make_table(settings, linked_service)
+    table.input = None
+
+    with pytest.raises(DeleteError):
+        table.delete()
+
+    table.input = pd.DataFrame()
+    with pytest.raises(DeleteError):
+        table.delete()
+
+
+def test_delete_rows_builds_where_clause_and_executes(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """Build WHERE clause from input dataframe and execute DELETE."""
+    settings.delete.delete_table = False
+    table = make_table(settings, linked_service)
+    table.input = pd.DataFrame(
+        [
+            {"id": 1, "name": "a"},
+            {"id": 2, "name": "b"},
+        ]
+    )
+
+    with (
+        patch.object(table, "_qualified_table", return_value="quoted"),
+        patch.object(table, "_quote_identifier", side_effect=lambda col: f"<{col}>"),
+    ):
+        begin_cm = MagicMock()
+        conn = MagicMock()
+        begin_cm.__enter__.return_value = conn
+        linked_service.engine.begin.return_value = begin_cm
+
+        with patch("ds_provider_microsoft_py_lib.dataset.mssql.text", side_effect=lambda q: q):
+            table.delete()
+
+    linked_service.engine.begin.assert_called_once()
+    conn.execute.assert_called_once()
+    delete_sql, payloads = conn.execute.call_args.args
+    assert "<id> = :id" in delete_sql
+    assert "<name> = :name" in delete_sql
+    assert payloads == [
+        {"id": 1, "name": "a"},
+        {"id": 2, "name": "b"},
+    ]
+
+
+def test_rename_not_implemented(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """Verify that rename raises NotImplementedError."""
+    table = make_table(settings, linked_service)
+
+    with pytest.raises(NotImplementedError):
+        table.rename()

@@ -162,10 +162,7 @@ class MssqlLinkedService(LinkedService[MsSqlLinkedServiceSettingsType], Generic[
         try:
             if not self._engine:
                 self.connect()
-            engine = self._engine
-            if engine is None:
-                raise ConnectionError("Engine is not yet created. Call connect() first.")
-            with engine.connect() as conn:
+            with self.engine.connect() as conn:
                 result = conn.execute(text("SELECT 1"))
                 result.fetchone()
             return True, "Connection successfully tested"

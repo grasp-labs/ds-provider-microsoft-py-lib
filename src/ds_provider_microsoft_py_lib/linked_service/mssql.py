@@ -143,7 +143,6 @@ class MssqlLinkedService(LinkedService[MssqlLinkedServiceSettingsType], Generic[
 
     def connect(self) -> None:
         """
-
         Connect to Microsoft SQL Server using pyodbc directly.
 
         Returns:

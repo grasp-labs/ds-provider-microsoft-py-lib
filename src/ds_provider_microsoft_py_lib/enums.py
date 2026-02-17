@@ -16,8 +16,8 @@ from enum import StrEnum
 
 class ResourceType(StrEnum):
     """
-    Constants definitions for Azure provider.
+    Constants definitions for Microsoft provider.
     """
 
-    MICROSOFT_SQL_LINKED_SERVICE = "DS.RESOURCE.LINKED_SERVICE.MICROSOFT_SQ"
+    MICROSOFT_SQL_LINKED_SERVICE = "DS.RESOURCE.LINKED_SERVICE.MICROSOFT_SQL"
     MICROSOFT_SQL_DATASET = "DS.RESOURCE.DATASET.MICROSOFT_SQL"

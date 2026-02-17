@@ -9,8 +9,9 @@ from ds_resource_plugin_py_lib.common.serde.serialize import DataSerializer
 class MssqlTableSerializer(DataSerializer):
     """
     Serialize SQL Table data.
-    The serializer is responsible for converting the data from
-    a DataFrame into a format that can be sent to the Azure Table Storage API.
+    The serializer is responsible for converting a pandas DataFrame into a cleaned
+    DataFrame and a sequence of row tuples suitable for MSSQL insert operations
+    (for example, via pyodbc.executemany).
     """
 
     def __call__(self, obj: pd.DataFrame, **_kwargs: Any) -> tuple[pd.DataFrame, list[tuple[Any, ...]]]:

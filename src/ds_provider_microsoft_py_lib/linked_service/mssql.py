@@ -66,7 +66,7 @@ MsSqlLinkedServiceSettingsType = TypeVar(
 @dataclass(kw_only=True)
 class MssqlLinkedService(LinkedService[MsSqlLinkedServiceSettingsType], Generic[MsSqlLinkedServiceSettingsType]):
     """
-    Linked service for connecting to AzureLinkedService.
+    Linked service for connecting to Microsoft SQL Server.
     """
 
     settings: MsSqlLinkedServiceSettingsType

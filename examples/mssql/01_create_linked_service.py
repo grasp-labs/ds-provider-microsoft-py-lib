@@ -1,8 +1,8 @@
 import uuid
 
-from ds_provider_microsoft_py_lib.linked_service.mssql import MssqlLinkedService, MssqlLinkedServiceSettings
+from ds_provider_microsoft_py_lib.linked_service.mssql import MssqlLinkedService, MsSqlLinkedServiceSettings
 
-settings = MssqlLinkedServiceSettings(
+settings = MsSqlLinkedServiceSettings(
     server="localhost",
     database="master",
     username="sa",

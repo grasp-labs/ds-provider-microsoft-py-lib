@@ -2,9 +2,9 @@
 **File:** ``mssql.py``
 **Region:** ``ds_provider_microsoft_py_lib/linked_service/mssql``
 
-Micsosoft SQL Linked Service
+Microsoft SQL Linked Service
 
-This module implements a linked service for Miscrosoft SQL, allowing users to connect to and interact with
+This module implements a linked service for Microsoft SQL, allowing users to connect to and interact with
 SQL Server instance.
 
 Example:
@@ -41,7 +41,7 @@ logger = Logger.get_logger(__name__, package=True)
 
 
 @dataclass(kw_only=True)
-class MssqlLinkedServiceSettings(LinkedServiceSettings):
+class MsSqlLinkedServiceSettings(LinkedServiceSettings):
     """
     The object containing the Microsoft SQL Server linked service settings.
     """
@@ -57,19 +57,19 @@ class MssqlLinkedServiceSettings(LinkedServiceSettings):
     connection_timeout: int = 30
 
 
-MssqlLinkedServiceSettingsType = TypeVar(
-    "MssqlLinkedServiceSettingsType",
-    bound=MssqlLinkedServiceSettings,
+MsSqlLinkedServiceSettingsType = TypeVar(
+    "MsSqlLinkedServiceSettingsType",
+    bound=MsSqlLinkedServiceSettings,
 )
 
 
 @dataclass(kw_only=True)
-class MssqlLinkedService(LinkedService[MssqlLinkedServiceSettingsType], Generic[MssqlLinkedServiceSettingsType]):
+class MssqlLinkedService(LinkedService[MsSqlLinkedServiceSettingsType], Generic[MsSqlLinkedServiceSettingsType]):
     """
     Linked service for connecting to AzureLinkedService.
     """
 
-    settings: MssqlLinkedServiceSettingsType
+    settings: MsSqlLinkedServiceSettingsType
     _engine: Engine | None = field(init=True, repr=False, default=None)
 
     def check_settings_is_set(self) -> None:
@@ -81,7 +81,7 @@ class MssqlLinkedService(LinkedService[MssqlLinkedServiceSettingsType], Generic[
         Raises:
             AttributeError: If settings are not set correctly.
         """
-        if not isinstance(self.settings, MssqlLinkedServiceSettings):
+        if not isinstance(self.settings, MsSqlLinkedServiceSettings):
             raise AttributeError("settings not set.")
 
     @property

@@ -4,10 +4,10 @@ import pandas as pd
 from ds_resource_plugin_py_lib.common.resource.dataset.errors import ReadError
 
 from ds_provider_microsoft_py_lib.dataset.mssql import MssqlTableDatasetSettings, MssqlTable
-from ds_provider_microsoft_py_lib.linked_service.mssql import MssqlLinkedService, MssqlLinkedServiceSettings
+from ds_provider_microsoft_py_lib.linked_service.mssql import MssqlLinkedService, MsSqlLinkedServiceSettings
 
 linked_service = MssqlLinkedService(
-    settings=MssqlLinkedServiceSettings(
+    settings=MsSqlLinkedServiceSettings(
         server="localhost",
         database="master",
         username="sa",

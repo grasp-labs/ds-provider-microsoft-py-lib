@@ -43,7 +43,7 @@ logger = Logger.get_logger(__name__, package=True)
 @dataclass(kw_only=True)
 class MssqlLinkedServiceSettings(LinkedServiceSettings):
     """
-    The object containing the Azure linked service settings.
+    The object containing the Microsoft SQL Server linked service settings.
     """
 
     server: str
@@ -70,7 +70,7 @@ class MssqlLinkedService(LinkedService[MssqlLinkedServiceSettingsType], Generic[
     """
 
     settings: MssqlLinkedServiceSettingsType
-    _engine: Engine
+    _engine: Engine | None = field(init=True, repr=False, default=None)
 
     def check_settings_is_set(self) -> None:
         """
@@ -111,7 +111,9 @@ class MssqlLinkedService(LinkedService[MssqlLinkedServiceSettingsType], Generic[
     def _get_connection_string(self) -> str:
         """
         Build the ODBC connection string.
-        :return: Connection string
+
+        Returns:
+            str: The ODBC connection string.
         """
         conn_str = (
             f"DRIVER={{{self.settings.driver}}};"
@@ -149,7 +151,7 @@ class MssqlLinkedService(LinkedService[MssqlLinkedServiceSettingsType], Generic[
         """
         self.check_settings_is_set()
         self._engine: Engine = self._create_engine()
-        logger.debug("Connected to Azure StorageAccount.")
+        logger.debug("Connected to Microsoft SQL Server.")
 
     def test_connection(self) -> tuple[bool, str]:
         """
@@ -161,7 +163,10 @@ class MssqlLinkedService(LinkedService[MssqlLinkedServiceSettingsType], Generic[
         try:
             if not self._engine:
                 self.connect()
-            with self._engine.connect() as conn:
+            engine = self._engine
+            if engine is None:
+                raise ConnectionError("Engine is not yet created. Call connect() first.")
+            with engine.connect() as conn:
                 result = conn.execute(text("SELECT 1"))
                 result.fetchone()
             return True, "Connection successfully tested"
@@ -176,5 +181,6 @@ class MssqlLinkedService(LinkedService[MssqlLinkedServiceSettingsType], Generic[
         Returns:
             None
         """
-        self._engine.dispose()  # todo: verify if this is the correct way to close the engine
-        logger.debug("Connection to SQL Server closed.")
+        if self._engine:
+            self._engine.dispose()  # todo: verify if this is the correct way to close the engine
+            logger.debug("Connection to SQL Server closed.")

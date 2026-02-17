@@ -67,10 +67,10 @@ class MssqlTable(
     settings: MssqlTableDatasetSettingsType
 
     serializer: MssqlTableSerializer = field(
-        default_factory=lambda: MssqlTableSerializer(),
+        default_factory=MssqlTableSerializer,
     )
     deserializer: MssqlTableDeserializer = field(
-        default_factory=lambda: MssqlTableDeserializer(),
+        default_factory=MssqlTableDeserializer,
     )
 
     @property
@@ -97,6 +97,9 @@ class MssqlTable(
 
         Reject identifiers containing obvious injection primitives like quotes, semicolons,
         brackets, or backslashes before quoting.
+
+        Returns:
+            str: The safely quoted identifier.
         """
         if re.search(r"[;\"'\\\[\]]", name):
             raise ValueError(f"Unsafe identifier: {name!r}")
@@ -104,7 +107,13 @@ class MssqlTable(
         return preparer.quote(name)
 
     def _qualified_table(self) -> str:
-        """Return a safely quoted schema-qualified table name."""
+        """
+        Return a safely quoted schema-qualified table name.
+
+        Returns:
+                str: The safely quoted schema-qualified table name.
+        """
+
         schema = self._quote_identifier(self.settings.schema_name)
         table = self._quote_identifier(self.settings.table_name)
         return f"{schema}.{table}"
@@ -118,6 +127,9 @@ class MssqlTable(
 
         Returns:
               None
+
+        Raises:
+            ReadError: If the table does not exist or if there is an error during reading.
         """
         table_name = self._get_full_table_name()
         logger.debug(f"Reading from table: {table_name}")
@@ -146,6 +158,9 @@ class MssqlTable(
 
         Returns:
               None
+
+        Raises:
+            CreateError: If there is an error during writing to the database.
         """
         try:
             _kwargs.pop("batch_size", None)
@@ -233,7 +248,11 @@ class MssqlTable(
         logger.info(f"   Expected batches: {(rows + chunk_size - 1) // chunk_size if chunk_size else 1}")
 
     def _fallback_insert(self, df_clean: pd.DataFrame, chunk_size: int | None, **_kwargs: Any) -> None:
-        """Append rows via pandas.to_sql as a safe fallback path."""
+        """
+        Append rows via pandas.to_sql as a safe fallback path.
+        Returns:
+            None
+        """
         logger.info("Appending rows via pandas to_sql (method='multi') as fallback")
         df_clean.to_sql(
             name=self.settings.table_name,
@@ -266,8 +285,12 @@ class MssqlTable(
 
         Args:
             _kwargs: Additional keyword arguments.
+
         Returns:
             None
+
+        Raises:
+            DeleteError: If there is an error during deletion or if no input rows are provided when delete_table is False.
         """
         if self.settings.delete.delete_table:
             table_name = self._qualified_table()
@@ -310,6 +333,9 @@ class MssqlTable(
         """
         Rename operation is not directly supported.
         Use SQL ALTER TABLE statements via update method.
+
+        Raises:
+            NotImplementedError: Always raised to indicate that rename is not supported.
         """
         raise NotImplementedError(
             "Rename operation is not directly supported. Use SQL ALTER TABLE statements via the update method with a custom query."

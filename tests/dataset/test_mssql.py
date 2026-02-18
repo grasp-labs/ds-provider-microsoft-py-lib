@@ -18,7 +18,6 @@ import pandas as pd
 import pytest
 from ds_resource_plugin_py_lib.common.resource.dataset.errors import (
     CreateError,
-    DatasetException,
     DeleteError,
     ReadError,
 )
@@ -33,7 +32,7 @@ from ds_provider_microsoft_py_lib.enums import ResourceType
 
 @pytest.fixture()
 def settings() -> MsSqlTableDatasetSettings:
-    return MsSqlTableDatasetSettings(table_name="mytable", schema_name="myschema", chunksize=2, delete=DeleteSettings())
+    return MsSqlTableDatasetSettings(table_name="mytable", schema_name="myschema", delete=DeleteSettings())
 
 
 @pytest.fixture()
@@ -56,17 +55,6 @@ def make_table(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -
     table.input = None
     table.output = None
     return table
-
-
-def test_settings_post_init_invalid_chunksize() -> None:
-    """Verify __post_init__ raises an error for invalid chunksize."""
-    with pytest.raises(DatasetException) as exc:
-        MsSqlTableDatasetSettings(table_name="t", chunksize=0)
-    assert exc.value.status_code == 422
-
-    with pytest.raises(DatasetException) as exc:
-        MsSqlTableDatasetSettings(table_name="t", chunksize=-1)
-    assert exc.value.status_code == 422
 
 
 def test_type_and_full_table_name(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
@@ -177,38 +165,12 @@ def test_create_uses_fast_executemany_and_skips_fallback(settings: MsSqlTableDat
     table._fallback_insert.assert_not_called()
 
 
-def test_create_with_zero_chunksize(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
-    """Verify create works with chunksize=0, using a single batch."""
-    settings.chunksize = 0
-    table = make_table(settings, linked_service)
-    table.input = pd.DataFrame({"col": [1, 2]})
-    rows = [(1,), (2,)]
-    df_clean = MagicMock()
-    df_clean.columns = ["col"]
-    table.serializer.return_value = (df_clean, rows)
-
-    inspector = MagicMock()
-    inspector.has_table.return_value = True
-    raw_conn = MagicMock()
-    cursor = MagicMock()
-    raw_conn.cursor.return_value = cursor
-    linked_service.engine.raw_connection.return_value = raw_conn
-
-    with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=inspector):
-        table.create()
-
-    # With chunksize=0, batch_size should default to len(rows)
-    cursor.executemany.assert_called_once()
-    _, batch_arg = cursor.executemany.call_args.args
-    assert len(batch_arg) == len(rows)
-
-
 def test_create_with_empty_input_raises_error(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     """Verify that create raises a CreateError if the input DataFrame is empty."""
     table = make_table(settings, linked_service)
     table.input = pd.DataFrame()  # Empty DataFrame
 
-    with pytest.raises(CreateError, match=r"Input DataFrame must be a non-empty pandas.DataFrame"):
+    with pytest.raises(CreateError, match=r"Input DataFrame must be a non-empty pandas\.DataFrame"):
         table.create()
 
 
@@ -260,7 +222,7 @@ def test_create_falls_back_when_fast_path_fails(settings: MsSqlTableDatasetSetti
     with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=inspector):
         table.create()
 
-    table._fallback_insert.assert_called_once_with(df_clean, settings.chunksize)
+    table._fallback_insert.assert_called_once_with(df_clean)
 
 
 def test_update_delegates_to_create(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:

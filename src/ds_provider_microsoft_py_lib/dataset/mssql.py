@@ -30,7 +30,7 @@ from ds_resource_plugin_py_lib.common.resource.dataset import (
     DatasetSettings,
     TabularDataset,
 )
-from ds_resource_plugin_py_lib.common.resource.dataset.errors import CreateError, DatasetException, DeleteError, ReadError
+from ds_resource_plugin_py_lib.common.resource.dataset.errors import CreateError, DeleteError, ReadError
 from sqlalchemy import inspect, text
 
 from ..enums import ResourceType
@@ -60,12 +60,7 @@ class DeleteSettings:
 class MsSqlTableDatasetSettings(DatasetSettings):
     table_name: str
     schema_name: str = "dbo"
-    chunksize: int | None = 1000  # Rows per batch (recommended for SQL Server)
     delete: DeleteSettings = field(default_factory=DeleteSettings)
-
-    def __post_init__(self) -> None:
-        if self.chunksize is not None and self.chunksize <= 0:
-            raise DatasetException("chunksize must be a positive integer or None", status_code=422)
 
 
 MsSqlTableDatasetSettingsType = TypeVar(
@@ -173,7 +168,7 @@ class MsSqlTable(
             logger.error(f"Failed to read from MSSQL: {exc}", exc_info=True)
             raise ReadError(f"Failed to read from MSSQL: {exc!s}") from exc
 
-    def create(self, **_kwargs: Any) -> None:  # noqa: PLR0915
+    def create(self, **_kwargs: Any) -> None:
         """
         Write data to SQL Server table.
         Appends data to existing table (like ADF copy activity).
@@ -200,10 +195,9 @@ class MsSqlTable(
             if df is None or not isinstance(df, pd.DataFrame) or df.empty:
                 raise CreateError("Input DataFrame must be a non-empty pandas.DataFrame for create operation.")
             row_count, col_count = df.shape
-            chunk_size = self.settings.chunksize
 
             df_clean, rows = self.serializer(df)
-            self._log_write_start(table_name, row_count, col_count, chunk_size)
+            self._log_write_start(table_name, row_count, col_count)
 
             start_time = time.time()
 
@@ -245,12 +239,8 @@ class MsSqlTable(
 
                     logger.info("Executing bulk insert with fast_executemany...")
 
-                    # Execute bulk insert in chunks to avoid very large ODBC batches
-                    batch_size = chunk_size or len(rows)
-
-                    for start_idx in range(0, len(rows), batch_size):
-                        batch = rows[start_idx : start_idx + batch_size]
-                        cursor.executemany(insert_sql, batch)
+                    # Execute bulk insert
+                    cursor.executemany(insert_sql, rows)
                     raw_conn.commit()
                     fast_path_succeeded = True
 
@@ -265,7 +255,7 @@ class MsSqlTable(
                 )
 
             if not fast_path_succeeded:
-                self._fallback_insert(df_clean, chunk_size, **_kwargs)
+                self._fallback_insert(df_clean, **_kwargs)
 
             elapsed = time.time() - start_time
             logger.info(f"Successfully wrote {row_count} rows to {table_name} in {elapsed:.2f}s")
@@ -275,15 +265,13 @@ class MsSqlTable(
             raise CreateError(f"Failed to write to MSSQL: {exc!s}") from exc
 
     @staticmethod
-    def _log_write_start(table_name: str, rows: int, cols: int, chunk_size: int | None) -> None:
+    def _log_write_start(table_name: str, rows: int, cols: int) -> None:
         logger.info("Starting MSSQL write operation:")
         logger.info(f"   Table: {table_name}")
         logger.info(f"   Rows: {rows}")
         logger.info(f"   Columns: {cols}")
-        logger.info(f"   Chunksize: {chunk_size}")
-        logger.info(f"   Expected batches: {(rows + chunk_size - 1) // chunk_size if chunk_size else 1}")
 
-    def _fallback_insert(self, df_clean: pd.DataFrame, chunk_size: int | None, **_kwargs: Any) -> None:
+    def _fallback_insert(self, df_clean: pd.DataFrame, **_kwargs: Any) -> None:
         """
         Append rows via pandas.to_sql as a safe fallback path.
         Returns:
@@ -296,7 +284,6 @@ class MsSqlTable(
             schema=self.settings.schema_name,
             if_exists="append",
             index=False,
-            chunksize=chunk_size,
             method="multi",
             **_kwargs,
         )

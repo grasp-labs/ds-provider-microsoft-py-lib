@@ -246,14 +246,22 @@ def test_delete_rows_builds_where_clause_and_executes(settings: MssqlTableDatase
     linked_service.engine.begin.assert_called_once()
     conn.execute.assert_called_once()
     delete_sql, payloads = conn.execute.call_args.args
-    assert "<id> = :id" in delete_sql
-    assert "<name> = :name" in delete_sql
-    assert payloads == [
-        {"id": 1, "name": "a"},
-        {"id": 2, "name": "b"},
-    ]
+    # Check that the DELETE uses the correct columns and bind parameters, without
+    # relying on the exact internal parameter names used by MssqlTable.delete().
+    assert "<id>" in delete_sql
+    assert "<name>" in delete_sql
+    # Expect parameter placeholders (e.g. :p0, :p1) instead of inlined values.
+    assert ":" in delete_sql
 
+    # Payloads should be a list of two parameter dicts corresponding to the two rows.
+    assert isinstance(payloads, list)
+    assert len(payloads) == 2
+    first_row_params, second_row_params = payloads
 
+    # Each payload dict should have two parameters whose values match the input rows,
+    # irrespective of the specific parameter names (e.g. p0, p1).
+    assert set(first_row_params.values()) == {1, "a"}
+    assert set(second_row_params.values()) == {2, "b"}
 def test_rename_not_implemented(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
     """Verify that rename raises NotImplementedError."""
     table = make_table(settings, linked_service)

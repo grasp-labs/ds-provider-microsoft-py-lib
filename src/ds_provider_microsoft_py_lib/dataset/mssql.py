@@ -1,3 +1,24 @@
+"""
+**File:** ``mssql.py``
+**Region:** ``ds_provider_microsoft_py_lib/dataset/mssql``
+
+MSSQL Table Dataset
+
+This module implements a dataset for Microsoft SQL Server tables.
+
+Example:
+>>> dataset = MssqlTable(
+...    linked_service=MsSqlLinkedService(...),
+...    settings=MssqlTableDatasetSettings(
+...        table_name="your_table_name",
+...        schema_name="your_schema_name",
+...        chunksize=10000,
+...        delete=DeleteSettings(delete_table=False)
+...    )
+... )
+>>> dataset.read()
+"""
+
 import re
 import time
 from dataclasses import dataclass, field
@@ -13,7 +34,7 @@ from ds_resource_plugin_py_lib.common.resource.dataset.errors import CreateError
 from sqlalchemy import inspect, text
 
 from ..enums import ResourceType
-from ..linked_service.mssql import MssqlLinkedService
+from ..linked_service.mssql import MsSqlLinkedService
 from ..serde.table import MssqlTableDeserializer, MssqlTableSerializer
 
 logger = Logger.get_logger(__name__, package=True)
@@ -43,28 +64,28 @@ class MssqlTableDatasetSettings(DatasetSettings):
     delete: DeleteSettings = field(default_factory=DeleteSettings)
 
 
-MssqlTableDatasetSettingsType = TypeVar(
-    "MssqlTableDatasetSettingsType",
+MsSqlTableDatasetSettingsType = TypeVar(
+    "MsSqlTableDatasetSettingsType",
     bound=MssqlTableDatasetSettings,
 )
-MssqlLinkedServiceType = TypeVar(
-    "MssqlLinkedServiceType",
-    bound=MssqlLinkedService[Any],
+MsSqlLinkedServiceType = TypeVar(
+    "MsSqlLinkedServiceType",
+    bound=MsSqlLinkedService[Any],
 )
 
 
 @dataclass(kw_only=True)
 class MssqlTable(
     TabularDataset[
-        MssqlLinkedServiceType,
-        MssqlTableDatasetSettingsType,
+        MsSqlLinkedServiceType,
+        MsSqlTableDatasetSettingsType,
         MssqlTableSerializer,
         MssqlTableDeserializer,
     ],
-    Generic[MssqlLinkedServiceType, MssqlTableDatasetSettingsType],
+    Generic[MsSqlLinkedServiceType, MsSqlTableDatasetSettingsType],
 ):
-    linked_service: MssqlLinkedServiceType
-    settings: MssqlTableDatasetSettingsType
+    linked_service: MsSqlLinkedServiceType
+    settings: MsSqlTableDatasetSettingsType
 
     serializer: MssqlTableSerializer = field(
         default_factory=MssqlTableSerializer,

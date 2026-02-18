@@ -1,12 +1,31 @@
+"""
+**File:** ``02_create_dataset.py``
+**Region:** ``examples/02_create_dataset.py``
+
+Example 02: Create and manage a dataset using MssqlTable
+--------------------------------------------------------------------------------------------
+
+This example demonstrates how to:
+- Create an instance of `MssqlTableDatasetSettings` with the necessary parameters for a Microsoft SQL Server table.
+- Create an instance of `MssqlTable` using the settings, a linked service, and additional metadata such as id, name,
+version, and description.
+- Connect to the linked service and attempt to read from the dataset,
+handling the case where the table does not exist yet.
+- Create the dataset by providing input data and calling the `create()` method, then read and print the output.
+- Delete specific rows from the dataset using the `delete()` method with input data,
+and print the output after deletion.
+- Delete the entire table by setting `delete_table` to True in the dataset settings and calling the `delete()` method,
+then attempt to read from the dataset to confirm deletion.
+"""
 import uuid
 
 import pandas as pd
 from ds_resource_plugin_py_lib.common.resource.dataset.errors import ReadError
 
 from ds_provider_microsoft_py_lib.dataset.mssql import MssqlTableDatasetSettings, MssqlTable
-from ds_provider_microsoft_py_lib.linked_service.mssql import MssqlLinkedService, MsSqlLinkedServiceSettings
+from ds_provider_microsoft_py_lib.linked_service.mssql import MsSqlLinkedService, MsSqlLinkedServiceSettings
 
-linked_service = MssqlLinkedService(
+linked_service = MsSqlLinkedService(
     settings=MsSqlLinkedServiceSettings(
         server="localhost",
         database="master",

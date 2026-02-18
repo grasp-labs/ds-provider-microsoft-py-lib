@@ -6,7 +6,7 @@ from urllib.parse import quote_plus
 import pytest
 
 from ds_provider_microsoft_py_lib.enums import ResourceType
-from ds_provider_microsoft_py_lib.linked_service.mssql import MssqlLinkedService, MsSqlLinkedServiceSettings
+from ds_provider_microsoft_py_lib.linked_service.mssql import MsSqlLinkedService, MsSqlLinkedServiceSettings
 
 
 @pytest.fixture()
@@ -19,8 +19,8 @@ def settings() -> MsSqlLinkedServiceSettings:
     )
 
 
-def make_service(settings: MsSqlLinkedServiceSettings) -> MssqlLinkedService:
-    service = MssqlLinkedService.__new__(MssqlLinkedService)
+def make_service(settings: MsSqlLinkedServiceSettings) -> MsSqlLinkedService:
+    service = MsSqlLinkedService.__new__(MsSqlLinkedService)
     service.settings = settings
     service._engine = None
     return service

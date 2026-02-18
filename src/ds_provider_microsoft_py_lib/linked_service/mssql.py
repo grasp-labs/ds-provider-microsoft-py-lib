@@ -8,7 +8,7 @@ This module implements a linked service for Microsoft SQL, allowing users to con
 SQL Server instance.
 
 Example:
->>>linked_service = MssqlLinkedService(
+>>>linked_service = MsSqlLinkedService(
 ...        settings=MsSqlLinkedServiceSettings(
 ...            server="account name",
 ...            database="account key",
@@ -20,6 +20,7 @@ Example:
 ...        version="0.0.1",
 ...        description="testmssqlpackage"
 ...    )
+>>> linked_service.connect()
 """
 
 from __future__ import annotations
@@ -64,7 +65,7 @@ MsSqlLinkedServiceSettingsType = TypeVar(
 
 
 @dataclass(kw_only=True)
-class MssqlLinkedService(LinkedService[MsSqlLinkedServiceSettingsType], Generic[MsSqlLinkedServiceSettingsType]):
+class MsSqlLinkedService(LinkedService[MsSqlLinkedServiceSettingsType], Generic[MsSqlLinkedServiceSettingsType]):
     """
     Linked service for connecting to Microsoft SQL Server.
     """

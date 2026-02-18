@@ -11,8 +11,8 @@ dependencies = [
     "ds-common-logger-py-lib>=0.1.0-alpha.5,<1.0.0",
     "pyodbc==5.3.0",
     "sqlalchemy==2.0.46",
-    "pandas",
-    "numpy",
+    "pandas>=2.0.0,<3.0.0",
+    "numpy>=2.4.0,<2.5.0",
 ]
 requires-python = ">=3.11"
 license = "Apache-2.0"

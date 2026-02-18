@@ -96,12 +96,12 @@ class MssqlTable(
         """Quote identifiers safely for SQL Server using SQLAlchemy's identifier preparer.
 
         Reject identifiers containing obvious injection primitives like quotes, semicolons,
-        brackets, or backslashes before quoting.
+        or brackets before quoting.
 
         Returns:
             str: The safely quoted identifier.
         """
-        if re.search(r"[;\"'\\\[\]]", name):
+        if re.search(r"[;\"'\[\]]", name):
             raise ValueError(f"Unsafe identifier: {name!r}")
         preparer = self.linked_service.engine.dialect.identifier_preparer
         return preparer.quote(name)

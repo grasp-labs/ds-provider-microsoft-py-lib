@@ -96,7 +96,7 @@ def test_read_success(settings: MssqlTableDatasetSettings, linked_service: Magic
 
 
 def test_read_value_error_maps_to_read_error(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
-    """Map ValueError from read to ReadError with404 status."""
+    """Map ValueError from read to ReadError with 404 status."""
     table = make_table(settings, linked_service)
 
     with (

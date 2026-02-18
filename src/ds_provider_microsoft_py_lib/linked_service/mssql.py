@@ -172,11 +172,11 @@ class MssqlLinkedService(LinkedService[MsSqlLinkedServiceSettingsType], Generic[
 
     def close(self) -> None:
         """
-        No need to close the linked service. Just to comply with the interface.
+        Close the linked service by disposing the underlying SQLAlchemy engine.
 
         Returns:
             None
         """
         if self._engine:
-            self._engine.dispose()  # todo: verify if this is the correct way to close the engine
+            self._engine.dispose()
             logger.debug("Connection to SQL Server closed.")

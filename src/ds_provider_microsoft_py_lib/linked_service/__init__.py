@@ -8,9 +8,9 @@ Example:
 >>>linked_service = MsSqlLinkedService(
 ...        settings = MsSqlLinkedServiceSettings(
 ...            server="account name",
-...            database="account key",
-...            username="account key",
-...            password="account key",
+...            database="database",
+...            username="username",
+...            password="password",
 ...        ),
 ...        id=uuid.uuid4(),
 ...        name="testmssqlpackage",

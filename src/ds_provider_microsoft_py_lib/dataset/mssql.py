@@ -237,8 +237,14 @@ class MssqlTable(
 
                     logger.info("Executing bulk insert with fast_executemany...")
 
-                    # Execute bulk insert
-                    cursor.executemany(insert_sql, rows)
+                    # Execute bulk insert in chunks to avoid very large ODBC batches
+                    batch_size = chunk_size or len(rows)
+                    if batch_size <= 0:
+                        batch_size = len(rows)
+
+                    for start_idx in range(0, len(rows), batch_size):
+                        batch = rows[start_idx : start_idx + batch_size]
+                        cursor.executemany(insert_sql, batch)
                     raw_conn.commit()
                     fast_path_succeeded = True
 

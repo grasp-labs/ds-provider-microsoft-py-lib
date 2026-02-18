@@ -2,7 +2,7 @@
 **File:** ``01_create_linked_service.py``
 **Region:** ``examples/01_create_linked_service.py``
 
-Example 01: Connect to Microsoft SQL Server using AzureLinkedService
+Example 01: Connect to Microsoft SQL Server using MsSqlLinkedService
 --------------------------------------------------------------------------------------------
 
 This example demonstrates how to:

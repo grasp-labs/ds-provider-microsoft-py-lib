@@ -71,7 +71,7 @@ class MsSqlLinkedService(LinkedService[MsSqlLinkedServiceSettingsType], Generic[
     """
 
     settings: MsSqlLinkedServiceSettingsType
-    _engine: Engine | None = field(init=True, repr=False, default=None)
+    _engine: Engine | None = field(init=False, repr=False, compare=False, default=None)
 
     def check_settings_is_set(self) -> None:
         """

@@ -188,6 +188,8 @@ class MssqlTable(
 
             table_name = self._get_full_table_name()
             df = self.input
+            if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+                raise CreateError("Input DataFrame must be a non-empty pandas.DataFrame for create operation.")
             row_count, col_count = df.shape
             chunk_size = self.settings.chunksize
 

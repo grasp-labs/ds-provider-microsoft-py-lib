@@ -17,9 +17,9 @@ Example
 
 from importlib.metadata import version
 
-from .dataset import MssqlTable, MssqlTableDatasetSettings
+from .dataset import MsSqlTable, MsSqlTableDatasetSettings
 from .linked_service import MsSqlLinkedService, MsSqlLinkedServiceSettings
 
 __version__ = version("ds-provider-microsoft-py-lib")
 
-__all__ = ["MsSqlLinkedService", "MsSqlLinkedServiceSettings", "MssqlTable", "MssqlTableDatasetSettings", "__version__"]
+__all__ = ["MsSqlLinkedService", "MsSqlLinkedServiceSettings", "MsSqlTable", "MsSqlTableDatasetSettings", "__version__"]

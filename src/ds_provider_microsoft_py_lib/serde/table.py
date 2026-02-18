@@ -6,7 +6,7 @@ Serialization and deserialization for Microsoft SQL Server tables.
 
 Example:
 >>> data_frame = pd.DataFrame(...)
->>> serializer = MssqlTableSerializer()
+>>> serializer = MsSqlTableSerializer()
 >>> cleaned_df, rows = serializer(data_frame)
 """
 
@@ -18,7 +18,7 @@ from ds_resource_plugin_py_lib.common.serde.deserialize import DataDeserializer
 from ds_resource_plugin_py_lib.common.serde.serialize import DataSerializer
 
 
-class MssqlTableSerializer(DataSerializer):
+class MsSqlTableSerializer(DataSerializer):
     """
     Serialize SQL Table data.
     The serializer is responsible for converting a pandas DataFrame into a cleaned
@@ -39,7 +39,7 @@ class MssqlTableSerializer(DataSerializer):
         return df_clean, rows
 
 
-class MssqlTableDeserializer(DataDeserializer):
+class MsSqlTableDeserializer(DataDeserializer):
     """
     No special deserialization needed for MSSQL tables, as pandas can read SQL query results directly into DataFrames.
     """

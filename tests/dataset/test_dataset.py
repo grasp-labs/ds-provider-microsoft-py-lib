@@ -6,15 +6,15 @@ from ds_resource_plugin_py_lib.common.resource.dataset.errors import DeleteError
 
 from ds_provider_microsoft_py_lib.dataset.mssql import (
     DeleteSettings,
-    MssqlTable,
-    MssqlTableDatasetSettings,
+    MsSqlTable,
+    MsSqlTableDatasetSettings,
 )
 from ds_provider_microsoft_py_lib.enums import ResourceType
 
 
 @pytest.fixture()
-def settings() -> MssqlTableDatasetSettings:
-    return MssqlTableDatasetSettings(table_name="mytable", schema_name="myschema", chunksize=2, delete=DeleteSettings())
+def settings() -> MsSqlTableDatasetSettings:
+    return MsSqlTableDatasetSettings(table_name="mytable", schema_name="myschema", chunksize=2, delete=DeleteSettings())
 
 
 @pytest.fixture()
@@ -26,8 +26,8 @@ def linked_service() -> MagicMock:
     return svc
 
 
-def make_table(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> MssqlTable:
-    table = MssqlTable.__new__(MssqlTable)
+def make_table(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> MsSqlTable:
+    table = MsSqlTable.__new__(MsSqlTable)
     table.settings = settings
     table.linked_service = linked_service
     table.serializer = MagicMock()
@@ -39,7 +39,7 @@ def make_table(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -
     return table
 
 
-def test_type_and_full_table_name(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+def test_type_and_full_table_name(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     """Verify resource type and full table name composition."""
 
     table = make_table(settings, linked_service)
@@ -48,7 +48,7 @@ def test_type_and_full_table_name(settings: MssqlTableDatasetSettings, linked_se
     assert table._get_full_table_name() == "myschema.mytable"
 
 
-def test_quote_identifier_uses_preparer(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+def test_quote_identifier_uses_preparer(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     """Ensure identifier quoting uses the dialect preparer."""
 
     table = make_table(settings, linked_service)
@@ -58,7 +58,7 @@ def test_quote_identifier_uses_preparer(settings: MssqlTableDatasetSettings, lin
     assert quoted == "[col]"
 
 
-def test_quote_identifier_rejects_unsafe(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+def test_quote_identifier_rejects_unsafe(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     """Reject unsafe identifier input."""
 
     table = make_table(settings, linked_service)
@@ -67,7 +67,7 @@ def test_quote_identifier_rejects_unsafe(settings: MssqlTableDatasetSettings, li
         table._quote_identifier("bad;col")
 
 
-def test_qualified_table_composes_schema_and_table(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+def test_qualified_table_composes_schema_and_table(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     """Compose qualified table name from schema and table."""
 
     table = make_table(settings, linked_service)
@@ -75,7 +75,7 @@ def test_qualified_table_composes_schema_and_table(settings: MssqlTableDatasetSe
         assert table._qualified_table() == "[schema].[table]"
 
 
-def test_read_success(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+def test_read_success(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     """Read returns a dataframe and sets output."""
 
     table = make_table(settings, linked_service)
@@ -93,7 +93,7 @@ def test_read_success(settings: MssqlTableDatasetSettings, linked_service: Magic
     assert list(table.output["a"]) == [1]
 
 
-def test_read_value_error_maps_to_read_error(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+def test_read_value_error_maps_to_read_error(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     """Map ValueError from read to ReadError with 404 status."""
     table = make_table(settings, linked_service)
 
@@ -106,7 +106,7 @@ def test_read_value_error_maps_to_read_error(settings: MssqlTableDatasetSettings
     assert exc.value.status_code == 404
 
 
-def test_read_other_errors_wrapped(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+def test_read_other_errors_wrapped(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     """Wrap unexpected read errors in ReadError."""
 
     table = make_table(settings, linked_service)
@@ -117,7 +117,7 @@ def test_read_other_errors_wrapped(settings: MssqlTableDatasetSettings, linked_s
         table.read()
 
 
-def test_create_uses_fast_executemany_and_skips_fallback(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+def test_create_uses_fast_executemany_and_skips_fallback(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     """Use fast executemany path when available."""
 
     table = make_table(settings, linked_service)
@@ -147,7 +147,7 @@ def test_create_uses_fast_executemany_and_skips_fallback(settings: MssqlTableDat
     table._fallback_insert.assert_not_called()
 
 
-def test_create_falls_back_when_fast_path_fails(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+def test_create_falls_back_when_fast_path_fails(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     """Fallback to slow insert path when fast path fails."""
 
     table = make_table(settings, linked_service)
@@ -167,7 +167,7 @@ def test_create_falls_back_when_fast_path_fails(settings: MssqlTableDatasetSetti
     table._fallback_insert.assert_called_once_with(df_clean, settings.chunksize)
 
 
-def test_update_delegates_to_create(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+def test_update_delegates_to_create(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     """Delegate update calls to create."""
     table = make_table(settings, linked_service)
 
@@ -177,7 +177,7 @@ def test_update_delegates_to_create(settings: MssqlTableDatasetSettings, linked_
     create_mock.assert_called_once_with(example=1)
 
 
-def test_delete_table_path_executes_drop(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+def test_delete_table_path_executes_drop(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     """Execute DROP TABLE when delete_table is True."""
     settings.delete.delete_table = True
     table = make_table(settings, linked_service)
@@ -195,7 +195,7 @@ def test_delete_table_path_executes_drop(settings: MssqlTableDatasetSettings, li
     conn.commit.assert_called_once()
 
 
-def test_delete_table_path_wraps_errors(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+def test_delete_table_path_wraps_errors(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     """Wrap errors from DROP TABLE in DeleteError."""
     settings.delete.delete_table = True
     table = make_table(settings, linked_service)
@@ -206,7 +206,7 @@ def test_delete_table_path_wraps_errors(settings: MssqlTableDatasetSettings, lin
             table.delete()
 
 
-def test_delete_requires_input_when_not_dropping_table(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+def test_delete_requires_input_when_not_dropping_table(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     """Require input dataframe for delete when delete_table is False."""
     settings.delete.delete_table = False
     table = make_table(settings, linked_service)
@@ -220,7 +220,7 @@ def test_delete_requires_input_when_not_dropping_table(settings: MssqlTableDatas
         table.delete()
 
 
-def test_delete_rows_builds_where_clause_and_executes(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+def test_delete_rows_builds_where_clause_and_executes(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     """Build WHERE clause from input dataframe and execute DELETE."""
     settings.delete.delete_table = False
     table = make_table(settings, linked_service)
@@ -247,7 +247,7 @@ def test_delete_rows_builds_where_clause_and_executes(settings: MssqlTableDatase
     conn.execute.assert_called_once()
     delete_sql, payloads = conn.execute.call_args.args
     # Check that the DELETE uses the correct columns and bind parameters, without
-    # relying on the exact internal parameter names used by MssqlTable.delete().
+    # relying on the exact internal parameter names used by MsXqlTable.delete().
     assert "<id>" in delete_sql
     assert "<name>" in delete_sql
     # Expect parameter placeholders (e.g. :p0, :p1) instead of inlined values.
@@ -262,7 +262,9 @@ def test_delete_rows_builds_where_clause_and_executes(settings: MssqlTableDatase
     # irrespective of the specific parameter names (e.g. p0, p1).
     assert set(first_row_params.values()) == {1, "a"}
     assert set(second_row_params.values()) == {2, "b"}
-def test_rename_not_implemented(settings: MssqlTableDatasetSettings, linked_service: MagicMock) -> None:
+
+
+def test_rename_not_implemented(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     """Verify that rename raises NotImplementedError."""
     table = make_table(settings, linked_service)
 

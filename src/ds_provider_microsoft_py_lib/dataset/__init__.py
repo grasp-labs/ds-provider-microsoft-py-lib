@@ -5,9 +5,9 @@
 Dataset module for Microsoft provider.
 
 Example:
->>> dataset = MssqlTable(
+>>> dataset = MsSqlTable(
 ...    linked_service=MsSqlLinkedService(...),
-...    settings=MssqlTableDatasetSettings(
+...    settings=MsSqlTableDatasetSettings(
 ...        table_name="your_table_name",
 ...        schema_name="your_schema_name",
 ...        delete=DeleteSettings(delete_table=False)
@@ -16,9 +16,9 @@ Example:
 >>> dataset.read()
 """
 
-from .mssql import MssqlTable, MssqlTableDatasetSettings
+from .mssql import MsSqlTable, MsSqlTableDatasetSettings
 
 __all__ = [
-    "MssqlTable",
-    "MssqlTableDatasetSettings",
+    "MsSqlTable",
+    "MsSqlTableDatasetSettings",
 ]

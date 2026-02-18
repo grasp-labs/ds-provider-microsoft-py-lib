@@ -6,6 +6,6 @@ Serialization and deserialization for Microsoft provider.
 
 Example:
 >>> data_frame = pd.DataFrame(...)
->>> serializer = MssqlTableSerializer()
+>>> serializer = MsSqlTableSerializer()
 >>> cleaned_df, rows = serializer(data_frame)
 """

@@ -14,4 +14,4 @@ dataset:
     kind: DS.RESOURCE.DATASET.MICROSOFT_SQL
     version: 1.0.0
     description: Microsoft SQL Server dataset
-    class_name: ds_provider_microsoft_py_lib.dataset.MssqlTable
+    class_name: ds_provider_microsoft_py_lib.dataset.MsSqlTable

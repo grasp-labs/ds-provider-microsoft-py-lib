@@ -7,9 +7,9 @@ MSSQL Table Dataset
 This module implements a dataset for Microsoft SQL Server tables.
 
 Example:
->>> dataset = MssqlTable(
+>>> dataset = MsSqlTable(
 ...    linked_service=MsSqlLinkedService(...),
-...    settings=MssqlTableDatasetSettings(
+...    settings=MsSqlTableDatasetSettings(
 ...        table_name="your_table_name",
 ...        schema_name="your_schema_name",
 ...        chunksize=10000,
@@ -35,7 +35,7 @@ from sqlalchemy import inspect, text
 
 from ..enums import ResourceType
 from ..linked_service.mssql import MsSqlLinkedService
-from ..serde.table import MssqlTableDeserializer, MssqlTableSerializer
+from ..serde.table import MsSqlTableDeserializer, MsSqlTableSerializer
 
 logger = Logger.get_logger(__name__, package=True)
 
@@ -57,7 +57,7 @@ class DeleteSettings:
 
 
 @dataclass(kw_only=True)
-class MssqlTableDatasetSettings(DatasetSettings):
+class MsSqlTableDatasetSettings(DatasetSettings):
     table_name: str
     schema_name: str = "dbo"
     chunksize: int | None = 1000  # Rows per batch (recommended for SQL Server)
@@ -66,7 +66,7 @@ class MssqlTableDatasetSettings(DatasetSettings):
 
 MsSqlTableDatasetSettingsType = TypeVar(
     "MsSqlTableDatasetSettingsType",
-    bound=MssqlTableDatasetSettings,
+    bound=MsSqlTableDatasetSettings,
 )
 MsSqlLinkedServiceType = TypeVar(
     "MsSqlLinkedServiceType",
@@ -75,23 +75,23 @@ MsSqlLinkedServiceType = TypeVar(
 
 
 @dataclass(kw_only=True)
-class MssqlTable(
+class MsSqlTable(
     TabularDataset[
         MsSqlLinkedServiceType,
         MsSqlTableDatasetSettingsType,
-        MssqlTableSerializer,
-        MssqlTableDeserializer,
+        MsSqlTableSerializer,
+        MsSqlTableDeserializer,
     ],
     Generic[MsSqlLinkedServiceType, MsSqlTableDatasetSettingsType],
 ):
     linked_service: MsSqlLinkedServiceType
     settings: MsSqlTableDatasetSettingsType
 
-    serializer: MssqlTableSerializer = field(
-        default_factory=MssqlTableSerializer,
+    serializer: MsSqlTableSerializer = field(
+        default_factory=MsSqlTableSerializer,
     )
-    deserializer: MssqlTableDeserializer = field(
-        default_factory=MssqlTableDeserializer,
+    deserializer: MsSqlTableDeserializer = field(
+        default_factory=MsSqlTableDeserializer,
     )
 
     @property
@@ -169,7 +169,7 @@ class MssqlTable(
             logger.error(f"Failed to read from MSSQL: {exc}", exc_info=True)
             raise ReadError(f"Failed to read from MSSQL: {exc!s}") from exc
 
-    def create(self, **_kwargs: Any) -> None:
+    def create(self, **_kwargs: Any) -> None:  # noqa: PLR0915
         """
         Write data to SQL Server table.
         Appends data to existing table (like ADF copy activity).
@@ -347,17 +347,12 @@ class MssqlTable(
             key_columns = list(df.columns)
             # Map potentially unsafe column names to safe SQLAlchemy bind parameter names
             param_map = {col: f"p{idx}" for idx, col in enumerate(key_columns)}
-            where_clause = " AND ".join(
-                f"{self._quote_identifier(col)} = :{param_map[col]}" for col in key_columns
-            )
+            where_clause = " AND ".join(f"{self._quote_identifier(col)} = :{param_map[col]}" for col in key_columns)
             delete_sql = text(f"DELETE FROM {table_name} WHERE {where_clause}")  # nosec B608
 
             # Build payloads using the safe parameter names
             records = df.to_dict(orient="records")
-            payloads = [
-                {param_map[col]: row[col] for col in key_columns}
-                for row in records
-            ]
+            payloads = [{param_map[col]: row[col] for col in key_columns} for row in records]
 
             try:
                 with self.linked_service.engine.begin() as conn:

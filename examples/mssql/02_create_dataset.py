@@ -2,12 +2,12 @@
 **File:** ``02_create_dataset.py``
 **Region:** ``examples/02_create_dataset.py``
 
-Example 02: Create and manage a dataset using MssqlTable
+Example 02: Create and manage a dataset using MsSqlTable
 --------------------------------------------------------------------------------------------
 
 This example demonstrates how to:
-- Create an instance of `MssqlTableDatasetSettings` with the necessary parameters for a Microsoft SQL Server table.
-- Create an instance of `MssqlTable` using the settings, a linked service, and additional metadata such as id, name,
+- Create an instance of `MsSqlTableDatasetSettings` with the necessary parameters for a Microsoft SQL Server table.
+- Create an instance of `MsSqlTable` using the settings, a linked service, and additional metadata such as id, name,
 version, and description.
 - Connect to the linked service and attempt to read from the dataset,
 handling the case where the table does not exist yet.
@@ -22,7 +22,7 @@ import uuid
 import pandas as pd
 from ds_resource_plugin_py_lib.common.resource.dataset.errors import ReadError
 
-from ds_provider_microsoft_py_lib.dataset.mssql import MssqlTableDatasetSettings, MssqlTable
+from ds_provider_microsoft_py_lib.dataset.mssql import MsSqlTableDatasetSettings, MsSqlTable
 from ds_provider_microsoft_py_lib.linked_service.mssql import MsSqlLinkedService, MsSqlLinkedServiceSettings
 
 linked_service = MsSqlLinkedService(
@@ -38,9 +38,9 @@ linked_service = MsSqlLinkedService(
     version="0.0.1",
     description="testmssqlpackage",
 )
-dataset = MssqlTable(
+dataset = MsSqlTable(
     linked_service=linked_service,
-    settings=MssqlTableDatasetSettings(
+    settings=MsSqlTableDatasetSettings(
         table_name="my_table2",
         schema_name="dbo",
     ),

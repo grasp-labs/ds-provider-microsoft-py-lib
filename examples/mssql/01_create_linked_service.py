@@ -8,7 +8,7 @@ Example 01: Connect to Microsoft SQL Server using MsSqlLinkedService
 This example demonstrates how to:
 - Create an instance of MsSqlLinkedServiceSettings with the necessary connection parameters for a Microsoft SQL Server instance.
 - Create an instance of MsSqlLinkedService using the settings and additional metadata such as id, name, version, and description.
-- Test the connection to the Microsoft SQL Server instance using the test_connection method of the MssqlLinkedService instance and print the result.
+- Test the connection to the Microsoft SQL Server instance using the test_connection method of the MsSqlLinkedService instance and print the result.
 """
 import uuid
 

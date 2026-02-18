@@ -188,6 +188,11 @@ class MsSqlTable(
             CreateError: If there is an error during writing to the database.
         """
         try:
+            qualified_table = self._qualified_table()
+        except ValueError as exc:
+            raise CreateError(f"Invalid table name or schema name: {exc}") from exc
+
+        try:
             _kwargs.pop("batch_size", None)
 
             table_name = self._get_full_table_name()
@@ -235,10 +240,6 @@ class MsSqlTable(
                     # Build INSERT statement
                     columns = ", ".join([self._quote_identifier(col) for col in df_clean.columns])
                     placeholders = ", ".join(["?" for _ in df_clean.columns])
-                    try:
-                        qualified_table = self._qualified_table()
-                    except ValueError as exc:
-                        raise CreateError(f"Invalid table name or schema name: {exc}") from exc
                     # Identifiers are validated/quoted; values are parameterized placeholders.
                     insert_sql = f"INSERT INTO {qualified_table} ({columns}) VALUES ({placeholders})"  # nosec B608
 
@@ -246,8 +247,6 @@ class MsSqlTable(
 
                     # Execute bulk insert in chunks to avoid very large ODBC batches
                     batch_size = chunk_size or len(rows)
-                    if batch_size <= 0:
-                        batch_size = len(rows)
 
                     for start_idx in range(0, len(rows), batch_size):
                         batch = rows[start_idx : start_idx + batch_size]
@@ -275,7 +274,8 @@ class MsSqlTable(
             logger.error(f"Failed to write to MSSQL: {exc}", exc_info=True)
             raise CreateError(f"Failed to write to MSSQL: {exc!s}") from exc
 
-    def _log_write_start(self, table_name: str, rows: int, cols: int, chunk_size: int | None) -> None:
+    @staticmethod
+    def _log_write_start(table_name: str, rows: int, cols: int, chunk_size: int | None) -> None:
         logger.info("Starting MSSQL write operation:")
         logger.info(f"   Table: {table_name}")
         logger.info(f"   Rows: {rows}")

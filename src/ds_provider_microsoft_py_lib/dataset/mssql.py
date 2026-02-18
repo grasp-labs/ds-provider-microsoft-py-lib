@@ -345,10 +345,19 @@ class MssqlTable(
 
             # Use all columns present in the input row as match criteria
             key_columns = list(df.columns)
-            where_clause = " AND ".join([f"{self._quote_identifier(col)} = :{col}" for col in key_columns])
+            # Map potentially unsafe column names to safe SQLAlchemy bind parameter names
+            param_map = {col: f"p{idx}" for idx, col in enumerate(key_columns)}
+            where_clause = " AND ".join(
+                f"{self._quote_identifier(col)} = :{param_map[col]}" for col in key_columns
+            )
             delete_sql = text(f"DELETE FROM {table_name} WHERE {where_clause}")  # nosec B608
 
-            payloads = [{col: row[col] for col in key_columns} for row in df.to_dict(orient="records")]
+            # Build payloads using the safe parameter names
+            records = df.to_dict(orient="records")
+            payloads = [
+                {param_map[col]: row[col] for col in key_columns}
+                for row in records
+            ]
 
             try:
                 with self.linked_service.engine.begin() as conn:

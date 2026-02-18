@@ -3,6 +3,13 @@
 **Region**: tests/dataset
 
 Unit tests for MsSqlTable dataset implementation, covering settings validation, read/write operations, and error handling.
+
+Covers:
+- Validation of dataset settings (e.g. chunksize)
+- Correct composition of full table name and identifier quoting
+- Successful read operation and error mapping
+- Create operation using fast executemany path, including fallback behavior
+- Delete operation for both dropping table and deleting rows, including error handling
 """
 
 from unittest.mock import MagicMock, patch

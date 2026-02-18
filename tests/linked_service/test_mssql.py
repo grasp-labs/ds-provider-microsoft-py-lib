@@ -3,6 +3,18 @@
 **Region**: tests/linked_service
 
 Unit tests for MsSqlLinkedService
+
+Covers:
+- Type matches ResourceType enum
+- check_settings_is_set rejects invalid type
+- engine property requires connection
+- get_connection_string builds expected connection string
+- create_engine builds expected pyodbc URL
+- connect sets engine
+- test_connection success triggers connect
+- test_connection failure returns error
+- close disposes engine
+- close is noop when no engine
 """
 
 from unittest.mock import MagicMock, patch

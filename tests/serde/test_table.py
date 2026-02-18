@@ -3,6 +3,11 @@
 **Region**: `tests/serde`
 
 Unit tests for the MsSqlTableSerializer to ensure it correctly handles NA values by converting them to None.
+
+Covers:
+- NA values in DataFrame are converted to None in the cleaned DataFrame.
+- NA values in the row tuples are converted to None.
+- Non-NA values are preserved in both the cleaned DataFrame and the row tuples.
 """
 
 import numpy as np

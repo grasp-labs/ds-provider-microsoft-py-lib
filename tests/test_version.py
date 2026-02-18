@@ -7,8 +7,6 @@ Description
 Smoke tests ensuring the package can be imported for coverage.
 """
 
-from __future__ import annotations
-
 import importlib
 
 

@@ -23,18 +23,14 @@ Example:
 >>> linked_service.connect()
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import Generic, TypeVar
 from urllib.parse import quote_plus
 
 from ds_common_logger_py_lib import Logger
 from ds_resource_plugin_py_lib.common.resource.linked_service import LinkedService, LinkedServiceSettings
 from sqlalchemy import create_engine, text
-
-if TYPE_CHECKING:
-    from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine
 
 from ..enums import ResourceType
 

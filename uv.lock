@@ -486,6 +486,8 @@ source = { editable = "." }
 dependencies = [
     { name = "ds-common-logger-py-lib" },
     { name = "ds-resource-plugin-py-lib" },
+    { name = "numpy" },
+    { name = "pandas" },
     { name = "pyodbc" },
     { name = "sqlalchemy" },
 ]
@@ -525,6 +527,8 @@ requires-dist = [
     { name = "ds-common-logger-py-lib", specifier = ">=0.1.0a5,<1.0.0" },
     { name = "ds-resource-plugin-py-lib", specifier = ">=0.1.0b1,<1.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.7.0" },
+    { name = "numpy" },
+    { name = "pandas" },
     { name = "pandas-stubs", marker = "extra == 'dev'", specifier = ">=2.1.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.6.0" },
     { name = "pyodbc", specifier = "==5.3.0" },

@@ -23,7 +23,7 @@ class MssqlTableSerializer(DataSerializer):
         """
 
         df_clean = obj.replace({np.nan: None, pd.NA: None, pd.NaT: None})
-        rows: list[tuple[Any, ...]] = [tuple(None if pd.isna(value) else value for value in row) for row in df_clean.values]
+        rows: list[tuple[Any, ...]] = [tuple(row) for row in df_clean.values]
         return df_clean, rows
 
 

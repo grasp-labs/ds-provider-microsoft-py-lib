@@ -1,3 +1,15 @@
+"""
+**File**: `table.py`
+**Region**: `ds-provider-microsoft-py-lib/serde/table`
+
+Serialization and deserialization for Microsoft SQL Server tables.
+
+Example:
+>>> data_frame = pd.DataFrame(...)
+>>> serializer = MssqlTableSerializer()
+>>> cleaned_df, rows = serializer(data_frame)
+"""
+
 from typing import Any
 
 import numpy as np

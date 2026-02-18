@@ -30,7 +30,7 @@ from ds_resource_plugin_py_lib.common.resource.dataset import (
     DatasetSettings,
     TabularDataset,
 )
-from ds_resource_plugin_py_lib.common.resource.dataset.errors import CreateError, DeleteError, ReadError
+from ds_resource_plugin_py_lib.common.resource.dataset.errors import CreateError, DatasetException, DeleteError, ReadError
 from sqlalchemy import inspect, text
 
 from ..enums import ResourceType
@@ -62,6 +62,10 @@ class MsSqlTableDatasetSettings(DatasetSettings):
     schema_name: str = "dbo"
     chunksize: int | None = 1000  # Rows per batch (recommended for SQL Server)
     delete: DeleteSettings = field(default_factory=DeleteSettings)
+
+    def __post_init__(self) -> None:
+        if self.chunksize is not None and self.chunksize <= 0:
+            raise DatasetException("chunksize must be a positive integer or None", status_code=422)
 
 
 MsSqlTableDatasetSettingsType = TypeVar(
@@ -231,7 +235,10 @@ class MsSqlTable(
                     # Build INSERT statement
                     columns = ", ".join([self._quote_identifier(col) for col in df_clean.columns])
                     placeholders = ", ".join(["?" for _ in df_clean.columns])
-                    qualified_table = self._qualified_table()
+                    try:
+                        qualified_table = self._qualified_table()
+                    except ValueError as exc:
+                        raise CreateError(f"Invalid table name or schema name: {exc}") from exc
                     # Identifiers are validated/quoted; values are parameterized placeholders.
                     insert_sql = f"INSERT INTO {qualified_table} ({columns}) VALUES ({placeholders})"  # nosec B608
 
@@ -321,9 +328,12 @@ class MsSqlTable(
         Raises:
             DeleteError: If there is an error during deletion or if no input rows are provided when delete_table is False.
         """
-        if self.settings.delete.delete_table:
+        try:
             table_name = self._qualified_table()
+        except ValueError as exc:
+            raise DeleteError(f"Cannot delete table: {exc}") from exc
 
+        if self.settings.delete.delete_table:
             try:
                 query = f"DROP TABLE IF EXISTS {table_name}"
                 logger.debug(f"Dropping table: {table_name}")
@@ -341,7 +351,6 @@ class MsSqlTable(
                 raise DeleteError("No input rows provided; refusing to delete all rows")
 
             df = self.input
-            table_name = self._qualified_table()
 
             # Use all columns present in the input row as match criteria
             key_columns = list(df.columns)

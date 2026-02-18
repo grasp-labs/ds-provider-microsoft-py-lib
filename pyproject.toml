@@ -42,6 +42,9 @@ Repository = "https://github.com/grasp-labs/ds-provider-microsoft-py-lib/"
 Issues = "https://github.com/grasp-labs/ds-provider-microsoft-py-lib/issues/"
 Changelog = "https://github.com/grasp-labs/ds-provider-microsoft-py-lib/releases"
 
+[project.entry-points."ds.providers"]
+microsoft = "ds_provider_microsoft_py_lib"
+
 [project.optional-dependencies]
 dev = [
     "bandit>=1.9.3",

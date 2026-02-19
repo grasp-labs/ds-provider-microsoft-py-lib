@@ -59,7 +59,7 @@ class DeleteSettings:
 @dataclass(kw_only=True)
 class MsSqlTableDatasetSettings(DatasetSettings):
     table_name: str
-    schema_name: str = "dbo"
+    schema_name: str
     delete: DeleteSettings = field(default_factory=DeleteSettings)
 
 
@@ -163,10 +163,14 @@ class MsSqlTable(
             logger.info(f"Read {len(self.output)} rows from MSSQL")
         except ValueError as exc:
             # pandas raises ValueError when the table does not exist
-            raise ReadError(f"Table {table_name} not found in schema {self.settings.schema_name}", status_code=404) from exc
+            raise ReadError(
+                f"Table {table_name} not found in schema {self.settings.schema_name}",
+                status_code=404,
+                details=self.get_details(),
+            ) from exc
         except Exception as exc:
             logger.error(f"Failed to read from MSSQL: {exc}", exc_info=True)
-            raise ReadError(f"Failed to read from MSSQL: {exc!s}") from exc
+            raise ReadError(f"Failed to read from MSSQL: {exc!s}", details=self.get_details(), status_code=500) from exc
 
     def create(self, **_kwargs: Any) -> None:
         """
@@ -189,7 +193,11 @@ class MsSqlTable(
             table_name = self._get_full_table_name()
             df = self.input
             if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-                raise CreateError("Input DataFrame must be a non-empty pandas.DataFrame for create operation.")
+                raise CreateError(
+                    "Input DataFrame must be a non-empty pandas.DataFrame for create operation.",
+                    details=self.get_details(),
+                    status_code=422,
+                )
             row_count, col_count = df.shape
 
             df_clean, rows = self.serializer(df)
@@ -224,7 +232,11 @@ class MsSqlTable(
             try:
                 qualified_table = self._qualified_table()
             except ValueError as exc:
-                raise CreateError(f"Invalid table name or schema name: {exc}") from exc
+                raise CreateError(
+                    f"Invalid table name or schema name: {exc}",
+                    details=self.get_details(),
+                    status_code=400,
+                ) from exc
             try:
                 raw_conn = self.linked_service.engine.raw_connection()
                 try:
@@ -262,7 +274,7 @@ class MsSqlTable(
             logger.info(f"   Throughput: {row_count / elapsed:.0f} rows/sec")
         except Exception as exc:
             logger.error(f"Failed to write to MSSQL: {exc}", exc_info=True)
-            raise CreateError(f"Failed to write to MSSQL: {exc!s}") from exc
+            raise CreateError(f"Failed to write to MSSQL: {exc!s}", details=self.get_details(), status_code=500) from exc
 
     @staticmethod
     def _log_write_start(table_name: str, rows: int, cols: int) -> None:
@@ -318,7 +330,7 @@ class MsSqlTable(
         try:
             table_name = self._qualified_table()
         except ValueError as exc:
-            raise DeleteError(f"Cannot delete table: {exc}") from exc
+            raise DeleteError(f"Cannot delete table: {exc}", details=self.get_details(), status_code=400) from exc
 
         if self.settings.delete.delete_table:
             try:
@@ -332,10 +344,12 @@ class MsSqlTable(
                 logger.info(f"Successfully dropped table: {table_name}")
             except Exception as exc:
                 logger.error(f"Failed to delete table: {exc}", exc_info=True)
-                raise DeleteError(f"Failed to delete table: {exc!s}") from exc
+                raise DeleteError(f"Failed to delete table: {exc!s}", details=self.get_details(), status_code=500) from exc
         else:
             if self.input is None or getattr(self.input, "empty", True):
-                raise DeleteError("No input rows provided; refusing to delete all rows")
+                raise DeleteError(
+                    "No input rows provided; refusing to delete all rows", details=self.get_details(), status_code=400
+                )
 
             df = self.input
 
@@ -356,7 +370,9 @@ class MsSqlTable(
                 logger.info(f"Successfully deleted {len(payloads)} rows from table: {table_name}")
             except Exception as exc:
                 logger.error(f"Failed to delete specific rows from table: {exc}", exc_info=True)
-                raise DeleteError(f"Failed to delete specific rows from table: {exc!s}") from exc
+                raise DeleteError(
+                    f"Failed to delete specific rows from table: {exc!s}", details=self.get_details(), status_code=500
+                ) from exc
 
     def rename(self, **_kwargs: Any) -> NoReturn:
         """
@@ -372,3 +388,26 @@ class MsSqlTable(
 
     def close(self) -> None:
         pass
+
+    def get_details(self) -> dict[str, Any]:
+        """
+        Get details about the dataset.
+
+        Returns:
+            dict[str, Any]
+        """
+        details: dict[str, Any] = {
+            "table_name": self.settings.table_name,
+            "schema_name": self.settings.schema_name,
+            "delete_table": self.settings.delete.delete_table,
+        }
+
+        read_settings = getattr(self.settings, "read", None)
+        if read_settings is not None and read_settings.query_filter is not None:
+            details["query_filter"] = read_settings.query_filter
+
+        delete_settings = getattr(self.settings, "delete", None)
+        if delete_settings is not None:
+            details["delete_table"] = str(delete_settings.delete_table)
+
+        return details

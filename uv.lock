@@ -521,7 +521,6 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7.0" },
     { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.9.3" },
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "ds-common-logger-py-lib", specifier = ">=0.1.0a5,<1.0.0" },

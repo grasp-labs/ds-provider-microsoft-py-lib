@@ -185,20 +185,10 @@ class MsSqlTable(
         Raises:
             CreateError: If there is an error during writing to the database.
         """
-
         try:
             _kwargs.pop("batch_size", None)
 
-            table_name = self._get_full_table_name()
-            df = self.input
-            if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-                raise CreateError(
-                    "Input DataFrame must be a non-empty pandas.DataFrame for create operation.",
-                    details=self.get_details(),
-                    status_code=422,
-                )
-            row_count, col_count = df.shape
-
+            table_name, df, row_count, col_count = self._prepare_write()
             df_clean, rows = self.serializer(df)
             self._log_write_start(table_name, row_count, col_count)
 
@@ -213,20 +203,10 @@ class MsSqlTable(
             logger.info(f"Table exists: {table_exists}")
 
             if not table_exists:
-                logger.info("Table does not exist; creating it with inferred types via pandas to_sql")
-                # Create empty table with inferred schema so bulk insert can target it
-                df_clean.head(0).to_sql(
-                    name=self.settings.table_name,
-                    con=self.linked_service.engine,
-                    schema=self.settings.schema_name,
-                    if_exists="fail",
-                    index=False,
-                )
-                logger.info("Table created")
+                self._create_table_from_df(df_clean)
 
             logger.info("Using fast_executemany for bulk insert...")
 
-            # Get raw pyodbc connection for fast_executemany
             fast_path_succeeded = False
             try:
                 qualified_table = self._qualified_table()
@@ -236,29 +216,9 @@ class MsSqlTable(
                     details=self.get_details(),
                     status_code=400,
                 ) from exc
+
             try:
-                raw_conn = self.linked_service.engine.raw_connection()
-                try:
-                    cursor = raw_conn.cursor()
-                    cursor.fast_executemany = True  # type: ignore[attr-defined] # Enable fast bulk insert
-
-                    # Build INSERT statement
-                    columns = ", ".join([self._quote_identifier(col) for col in df_clean.columns])
-                    placeholders = ", ".join(["?" for _ in df_clean.columns])
-                    # Identifiers are validated/quoted; values are parameterized placeholders.
-                    insert_sql = f"INSERT INTO {qualified_table} ({columns}) VALUES ({placeholders})"  # nosec B608
-
-                    logger.info("Executing bulk insert with fast_executemany...")
-
-                    # Execute bulk insert
-                    cursor.executemany(insert_sql, rows)
-                    raw_conn.commit()
-                    fast_path_succeeded = True
-
-                    logger.info("Bulk insert completed")
-
-                finally:
-                    raw_conn.close()
+                fast_path_succeeded = self._attempt_fast_bulk_insert(qualified_table, df_clean, rows)
             except Exception:
                 logger.warning(
                     "fast_executemany bulk insert failed, falling back to pandas.to_sql append",
@@ -277,6 +237,57 @@ class MsSqlTable(
         except Exception as exc:
             logger.error(f"Failed to write to MSSQL: {exc}", exc_info=True)
             raise CreateError(f"Failed to write to MSSQL: {exc!s}", details=self.get_details(), status_code=500) from exc
+
+    def _prepare_write(self) -> tuple[str, pd.DataFrame, int, int]:
+        table_name = self._get_full_table_name()
+        df = self.input
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            raise CreateError(
+                "Input DataFrame must be a non-empty pandas.DataFrame for create operation.",
+                details=self.get_details(),
+                status_code=422,
+            )
+        row_count, col_count = df.shape
+        return table_name, df, row_count, col_count
+
+    def _create_table_from_df(self, df_clean: pd.DataFrame) -> None:
+        logger.info("Table does not exist; creating it with inferred types via pandas to_sql")
+        # Create empty table with inferred schema so bulk insert can target it
+        df_clean.head(0).to_sql(
+            name=self.settings.table_name,
+            con=self.linked_service.engine,
+            schema=self.settings.schema_name,
+            if_exists="fail",
+            index=False,
+        )
+        logger.info("Table created")
+
+    def _attempt_fast_bulk_insert(self, qualified_table: str, df_clean: pd.DataFrame, rows: list[tuple[Any, ...]]) -> bool:
+        """
+        Try to use pyodbc fast_executemany path. Returns True on success, False on failure.
+        """
+        raw_conn = self.linked_service.engine.raw_connection()
+        try:
+            cursor = raw_conn.cursor()
+            cursor.fast_executemany = True  # type: ignore[attr-defined] # Enable fast bulk insert
+
+            # Build INSERT statement
+            columns = ", ".join([self._quote_identifier(col) for col in df_clean.columns])
+            placeholders = ", ".join(["?" for _ in df_clean.columns])
+            # Identifiers are validated/quoted; values are parameterized placeholders.
+            insert_sql = f"INSERT INTO {qualified_table} ({columns}) VALUES ({placeholders})"  # nosec B608
+
+            logger.info("Executing bulk insert with fast_executemany...")
+
+            # Execute bulk insert
+            cursor.executemany(insert_sql, rows)
+            raw_conn.commit()
+
+            logger.info("Bulk insert completed")
+            return True
+
+        finally:
+            raw_conn.close()
 
     @staticmethod
     def _log_write_start(table_name: str, rows: int, cols: int) -> None:

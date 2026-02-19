@@ -20,18 +20,21 @@ def test_mssql_table_serializer_handles_different_types():
         "float_col": [1.1, 2.2, 3.3],
         "str_col": ["a", "b", "c"],
         "bool_col": [True, False, True],
+        "datetime_col": [pd.Timestamp("2023-01-01"), pd.Timestamp("2023-01-02"), pd.NaT],
     }
     df = pd.DataFrame(data)
 
     serializer = MsSqlTableSerializer()
     cleaned_df, rows = serializer(df)
 
-    assert cleaned_df.equals(df)
-    assert rows == [
-        (1, 1.1, "a", True),
-        (2, 2.2, "b", False),
-        (3, 3.3, "c", True),
+    expected_rows = [
+        (1, 1.1, "a", True, pd.Timestamp("2023-01-01")),
+        (2, 2.2, "b", False, pd.Timestamp("2023-01-02")),
+        (3, 3.3, "c", True, None),
     ]
+
+    assert cleaned_df["datetime_col"].iloc[2] is None
+    assert rows == expected_rows
 
 
 def test_mssql_table_serializer_empty_dataframe():

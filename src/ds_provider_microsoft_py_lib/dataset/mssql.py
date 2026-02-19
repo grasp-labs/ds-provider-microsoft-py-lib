@@ -182,10 +182,6 @@ class MsSqlTable(
         Raises:
             CreateError: If there is an error during writing to the database.
         """
-        try:
-            qualified_table = self._qualified_table()
-        except ValueError as exc:
-            raise CreateError(f"Invalid table name or schema name: {exc}") from exc
 
         try:
             _kwargs.pop("batch_size", None)
@@ -225,6 +221,10 @@ class MsSqlTable(
 
             # Get raw pyodbc connection for fast_executemany
             fast_path_succeeded = False
+            try:
+                qualified_table = self._qualified_table()
+            except ValueError as exc:
+                raise CreateError(f"Invalid table name or schema name: {exc}") from exc
             try:
                 raw_conn = self.linked_service.engine.raw_connection()
                 try:

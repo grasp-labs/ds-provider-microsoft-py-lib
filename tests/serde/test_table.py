@@ -48,3 +48,46 @@ def test_mssql_table_serializer_handles_na_values():
     # Check that non-NA values are preserved
     assert cleaned_df.iloc[0, 0] == 1
     assert rows[0][0] == 1
+
+
+def test_clean_column_datetime_with_tz():
+    """
+    Test that _clean_column correctly handles datetime columns with timezones.
+    """
+    serializer = MsSqlTableSerializer()
+    s = pd.Series(pd.to_datetime(["2024-01-01 12:00:00+01:00", "2024-01-02 12:00:00-05:00"], utc=True))
+    cleaned_s = serializer._clean_column(s)
+    expected_s = pd.Series(pd.to_datetime(["2024-01-01 11:00:00", "2024-01-02 17:00:00"]))
+    pd.testing.assert_series_equal(cleaned_s, expected_s)
+
+
+def test_clean_column_timedelta():
+    """
+    Test that _clean_column correctly handles timedelta columns.
+    """
+    serializer = MsSqlTableSerializer()
+    s = pd.Series([pd.Timedelta("1 days"), pd.Timedelta("2 hours")])
+    cleaned_s = serializer._clean_column(s)
+    expected_s = pd.Series([86400.0, 7200.0])
+    pd.testing.assert_series_equal(cleaned_s, expected_s)
+
+
+def test_clean_column_complex():
+    """
+    Test that _clean_column correctly handles complex number columns.
+    """
+    serializer = MsSqlTableSerializer()
+    s = pd.Series([1 + 2j, 3 - 4j])
+    cleaned_s = serializer._clean_column(s)
+    expected_s = pd.Series(["(1+2j)", "(3-4j)"])
+    pd.testing.assert_series_equal(cleaned_s, expected_s)
+
+
+def test_clean_column_no_change():
+    """
+    Test that _clean_column doesn't change columns that don't need cleaning.
+    """
+    serializer = MsSqlTableSerializer()
+    s = pd.Series([1, 2, 3])
+    cleaned_s = serializer._clean_column(s)
+    pd.testing.assert_series_equal(s, cleaned_s)

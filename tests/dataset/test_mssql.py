@@ -314,7 +314,7 @@ def test_delete_rows_builds_where_clause_and_executes(settings: MsSqlTableDatase
     conn.execute.assert_called_once()
     delete_sql, payloads = conn.execute.call_args.args
     # Check that the DELETE uses the correct columns and bind parameters, without
-    # relying on the exact internal parameter names used by MsXqlTable.delete().
+    # relying on the exact internal parameter names used by MsSqlTable.delete().
     assert "<id>" in delete_sql
     assert "<name>" in delete_sql
     # Expect parameter placeholders (e.g. :p0, :p1) instead of inlined values.

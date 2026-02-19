@@ -50,7 +50,10 @@ class MsSqlTableSerializer(DataSerializer):
         df_clean = obj.replace({np.nan: None, pd.NA: None, pd.NaT: None})
         for col in df_clean.columns:
             df_clean[col] = self._clean_column(df_clean[col])
-        rows: list[tuple[Any, ...]] = [tuple(row) for row in df_clean.values]
+        # Use a copy cast to object dtype to ensure Python-native scalars (e.g., datetime.datetime)
+        # instead of NumPy scalars (e.g., numpy.datetime64) when materializing rows.
+        df_for_rows = df_clean.astype(object)
+        rows: list[tuple[Any, ...]] = list(df_for_rows.itertuples(index=False, name=None))
         return df_clean, rows
 
 

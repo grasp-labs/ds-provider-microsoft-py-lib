@@ -26,7 +26,8 @@ class MsSqlTableSerializer(DataSerializer):
     (for example, via pyodbc.executemany).
     """
 
-    def _clean_column(self, col_data: pd.Series) -> pd.Series:
+    @staticmethod
+    def _clean_column(col_data: pd.Series) -> pd.Series:
         """
         Cleans a pandas Series by handling special data types for MSSQL compatibility.
         """

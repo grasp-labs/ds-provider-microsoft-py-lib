@@ -3,6 +3,11 @@
 **Region**: `tests/serde`
 
 Unit tests for the MsSqlTableSerializer to ensure it correctly handles various data types.
+
+Covers:
+- Handling of different data types (int, float, str, bool, datetime)
+- Handling of empty DataFrame
+- Handling of DataFrame with all NA values
 """
 
 import numpy as np

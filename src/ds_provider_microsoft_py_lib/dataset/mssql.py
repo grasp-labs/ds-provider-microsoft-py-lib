@@ -12,7 +12,6 @@ Example:
 ...    settings=MsSqlTableDatasetSettings(
 ...        table_name="your_table_name",
 ...        schema_name="your_schema_name",
-...        chunksize=10000,
 ...        delete=DeleteSettings(delete_table=False)
 ...    )
 ... )

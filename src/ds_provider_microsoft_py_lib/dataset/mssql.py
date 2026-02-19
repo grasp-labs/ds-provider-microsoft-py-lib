@@ -271,6 +271,9 @@ class MsSqlTable(
             elapsed = time.time() - start_time
             logger.info(f"Successfully wrote {row_count} rows to {table_name} in {elapsed:.2f}s")
             logger.info(f"   Throughput: {row_count / elapsed:.0f} rows/sec")
+        except CreateError as err:
+            logger.error(f"Failed to write to MSSQL: {err}", exc_info=True)
+            raise
         except Exception as exc:
             logger.error(f"Failed to write to MSSQL: {exc}", exc_info=True)
             raise CreateError(f"Failed to write to MSSQL: {exc!s}", details=self.get_details(), status_code=500) from exc

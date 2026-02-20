@@ -18,6 +18,7 @@ Example:
 >>> dataset.read()
 """
 
+import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -30,13 +31,64 @@ from ds_resource_plugin_py_lib.common.resource.dataset import (
     TabularDataset,
 )
 from ds_resource_plugin_py_lib.common.resource.dataset.errors import CreateError, DeleteError, ReadError
-from sqlalchemy import inspect, text
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, Integer, String, inspect, text
 
 from ..enums import ResourceType
 from ..linked_service.mssql import MsSqlLinkedService
 from ..serde.table import MsSqlTableDeserializer, MsSqlTableSerializer
 
 logger = Logger.get_logger(__name__, package=True)
+
+
+def _coerce_value(value: Any) -> Any:
+    """
+    Normalize pandas / numpy / pyarrow scalars for safe SQL Server insertion.
+
+    This function ensures that all values are converted to native Python types
+    that map deterministically to SQL Server types. Pandas missing values
+    (NaT, NA, NaN) are converted to None (SQL NULL). Numpy and pyarrow scalars
+    are converted to native Python types via .item().
+
+    Args:
+        value: A scalar value that may be a pandas, numpy, or pyarrow type.
+
+    Returns:
+        A native Python type (int, float, str, bool, datetime.datetime, dict, list) or None.
+
+    Examples:
+        >>> _coerce_value(pd.NaT)
+        None
+        >>> _coerce_value(np.int64(42))
+        42
+        >>> _coerce_value(pd.Timestamp('2024-01-15 10:30:00'))
+        datetime.datetime(2024, 1, 15, 10, 30)
+        >>> _coerce_value({'key': 'value'})
+        '{"key": "value"}'
+    """
+    # Handle pandas / numpy missing values -> None (SQL NULL)
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+
+    # Handle nested structures (dict/list) -> JSON string
+    if isinstance(value, (dict, list)):
+        return json.dumps(value)
+
+    # Handle pandas Timestamp -> native datetime.datetime
+    if isinstance(value, pd.Timestamp):
+        return value.to_pydatetime()
+
+    # Handle numpy / pyarrow scalar types -> native Python types via .item()
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except (TypeError, ValueError):
+            pass
+
+    # Already a native Python type or unsupported; return as-is
+    return value
 
 
 @dataclass(kw_only=True)
@@ -250,21 +302,112 @@ class MsSqlTable(
         row_count, col_count = df.shape
         return table_name, df, row_count, col_count
 
+    @staticmethod
+    def _infer_sql_types(df: pd.DataFrame) -> dict[str, Any]:
+        """
+        Infer explicit SQL Server types from DataFrame dtypes.
+
+        This builds a SQLAlchemy dtype mapping that avoids implicit inference
+        by pandas.to_sql(). Each column dtype is explicitly mapped to a SQL type
+        based on pandas dtype inspection.
+
+        Args:
+            df: The DataFrame to inspect.
+
+        Returns:
+            A dict suitable for passing to df.to_sql(dtype=...) with explicit types.
+
+        Mappings:
+            - int64 (nullable) -> BIGINT
+            - int32 (nullable) -> INT
+            - float64 -> FLOAT
+            - bool -> BIT
+            - object (string-like) -> NVARCHAR(MAX)
+            - datetime64[ns] -> DATETIME2(7)
+            - datetime64[ns, UTC] -> DATETIME2(7)
+        """
+
+        dtype_map: dict[str, Any] = {}
+
+        for col in df.columns:
+            dtype = df[col].dtype
+            dtype_str = str(dtype).lower()
+
+            logger.debug(f"Column {col}: pandas dtype = {dtype}")
+
+            # Nullable integer types
+            if dtype == "Int64" or dtype == pd.Int64Dtype():
+                dtype_map[col] = BigInteger()
+            elif dtype == "Int32" or dtype == pd.Int32Dtype():
+                dtype_map[col] = Integer()
+            # Numpy integer types
+            elif "int64" in dtype_str:
+                dtype_map[col] = BigInteger()
+            elif "int32" in dtype_str or "int" in dtype_str:
+                dtype_map[col] = Integer()
+            # Float
+            elif "float" in dtype_str:
+                dtype_map[col] = Float()
+            # Boolean
+            elif "bool" in dtype_str:
+                dtype_map[col] = Boolean()
+            # Datetime
+            elif "datetime64" in dtype_str:
+                dtype_map[col] = DateTime()
+            # String / object
+            elif dtype == "string" or dtype == pd.StringDtype() or "object" in dtype_str:
+                # Use VARCHAR(MAX) which pandas maps to NVARCHAR(MAX) on SQL Server
+                dtype_map[col] = String()
+            else:
+                logger.warning(f"Column {col}: No explicit type mapping for dtype {dtype}; will use pandas inference")
+
+        return dtype_map
+
     def _create_table_from_df(self, df_clean: pd.DataFrame) -> None:
-        logger.info("Table does not exist; creating it with inferred types via pandas to_sql")
-        # Create empty table with inferred schema so bulk insert can target it
-        df_clean.head(0).to_sql(
-            name=self.settings.table_name,
-            con=self.linked_service.engine,
-            schema=self.settings.schema_name,
-            if_exists="fail",
-            index=False,
-        )
-        logger.info("Table created")
+        """
+        Create table using explicit SQL type mapping.
+
+        Instead of relying on pandas.to_sql() implicit type inference,
+        we build an explicit dtype mapping from the DataFrame and pass it
+        to to_sql(). This ensures deterministic, predictable column types.
+
+        Args:
+            df_clean: The cleaned DataFrame.
+
+        Raises:
+            CreateError: If table creation fails.
+        """
+        try:
+            # Build explicit SQL type mapping
+            explicit_types = self._infer_sql_types(df_clean)
+
+            logger.info(f"Creating table with explicit types: {explicit_types}")
+
+            # Create table with explicit dtype mapping
+            df_clean.head(0).to_sql(
+                name=self.settings.table_name,
+                con=self.linked_service.engine,
+                schema=self.settings.schema_name,
+                if_exists="fail",
+                index=False,
+                dtype=explicit_types,  # type: ignore[arg-type]
+            )
+
+            logger.info("Table created successfully with explicit type mapping")
+        except Exception as exc:
+            logger.error(f"Failed to create table: {exc}", exc_info=True)
+            raise CreateError(
+                f"Failed to create table: {exc!s}",
+                details=self.get_details(),
+                status_code=500,
+            ) from exc
 
     def _attempt_fast_bulk_insert(self, qualified_table: str, df_clean: pd.DataFrame, rows: list[tuple[Any, ...]]) -> bool:
         """
         Try to use pyodbc fast_executemany path. Returns True on success, False on failure.
+
+        All values in rows are coerced to native Python types before insertion
+        to avoid silent type changes by the database driver.
         """
         raw_conn = self.linked_service.engine.raw_connection()
         try:
@@ -279,8 +422,13 @@ class MsSqlTable(
 
             logger.info("Executing bulk insert with fast_executemany...")
 
+            # Coerce all values in rows to native Python types before insertion
+            coerced_rows = [tuple(_coerce_value(val) for val in row) for row in rows]
+
+            logger.debug(f"Sample coerced row: {coerced_rows[0] if coerced_rows else 'N/A'}")
+
             # Execute bulk insert
-            cursor.executemany(insert_sql, rows)
+            cursor.executemany(insert_sql, coerced_rows)
             raw_conn.commit()
 
             logger.info("Bulk insert completed")
@@ -299,19 +447,36 @@ class MsSqlTable(
     def _fallback_insert(self, df_clean: pd.DataFrame, **_kwargs: Any) -> None:
         """
         Append rows via pandas.to_sql as a safe fallback path.
+
+        Uses explicit SQL type mapping to avoid implicit type inference by pandas.
+        This is a fallback when fast_executemany fails.
+
         Returns:
             None
         """
-        logger.info("Appending rows via pandas to_sql (method='multi') as fallback")
-        df_clean.to_sql(
-            name=self.settings.table_name,
-            con=self.linked_service.engine,
-            schema=self.settings.schema_name,
-            if_exists="append",
-            index=False,
-            method="multi",
-            **_kwargs,
-        )
+        try:
+            # Build explicit SQL type mapping
+            explicit_types = self._infer_sql_types(df_clean)
+
+            logger.info("Appending rows via pandas to_sql with explicit type mapping (fallback)")
+            df_clean.to_sql(
+                name=self.settings.table_name,
+                con=self.linked_service.engine,
+                schema=self.settings.schema_name,
+                if_exists="append",
+                index=False,
+                method="multi",
+                dtype=explicit_types,  # type: ignore[arg-type]
+                **_kwargs,
+            )
+            logger.info("Fallback insert completed")
+        except Exception as exc:
+            logger.error(f"Fallback insert failed: {exc}", exc_info=True)
+            raise CreateError(
+                f"Fallback insert failed: {exc!s}",
+                details=self.get_details(),
+                status_code=500,
+            ) from exc
 
     def update(self, **_kwargs: Any) -> None:
         """

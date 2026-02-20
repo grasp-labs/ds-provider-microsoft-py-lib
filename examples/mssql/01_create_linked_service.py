@@ -10,6 +10,7 @@ This example demonstrates how to:
 - Create an instance of MsSqlLinkedService using the settings and additional metadata such as id, name, version, and description.
 - Test the connection to the Microsoft SQL Server instance using the test_connection method of the MsSqlLinkedService instance and print the result.
 """
+
 import uuid
 
 from ds_provider_microsoft_py_lib.linked_service.mssql import MsSqlLinkedService, MsSqlLinkedServiceSettings
@@ -21,8 +22,9 @@ settings = MsSqlLinkedServiceSettings(
     password="dockerStrongPwd123",
     trust_server_certificate=True,
 )
-linked_service = MsSqlLinkedService(settings=settings, id=uuid.uuid4(), name="testmssqlpackage", version="0.0.1",
-                                    description="testmssqlpackage")
+linked_service = MsSqlLinkedService(
+    settings=settings, id=uuid.uuid4(), name="testmssqlpackage", version="0.0.1", description="testmssqlpackage"
+)
 
 result = linked_service.test_connection()
 print(result)

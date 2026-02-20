@@ -21,6 +21,7 @@ from ds_resource_plugin_py_lib.common.resource.dataset.errors import (
     DeleteError,
     ReadError,
 )
+from sqlalchemy import Integer
 
 from ds_provider_microsoft_py_lib.dataset.mssql import (
     DeleteSettings,
@@ -28,6 +29,7 @@ from ds_provider_microsoft_py_lib.dataset.mssql import (
     MsSqlTableDatasetSettings,
 )
 from ds_provider_microsoft_py_lib.enums import ResourceType
+from ds_provider_microsoft_py_lib.serde.table import MsSqlTableSerializer
 
 
 @pytest.fixture()
@@ -52,6 +54,18 @@ def make_table(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -
     table.deserializer = MagicMock()
     table._fallback_insert = MagicMock()
     table._log_write_start = MagicMock()
+    table.input = None
+    table.output = None
+    return table
+
+
+def make_table_with_real_methods(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> MsSqlTable:
+    """Create table with real implementations of helper methods for integration testing."""
+    table = MsSqlTable.__new__(MsSqlTable)
+    table.settings = settings
+    table.linked_service = linked_service
+    table.serializer = MsSqlTableSerializer()
+    table.deserializer = MagicMock()
     table.input = None
     table.output = None
     return table
@@ -138,14 +152,13 @@ def test_read_other_errors_wrapped(settings: MsSqlTableDatasetSettings, linked_s
 def test_create_uses_fast_executemany_and_skips_fallback(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     """Use fast executemany path when available."""
 
-    table = make_table(settings, linked_service)
+    table = make_table_with_real_methods(settings, linked_service)
     table.input = pd.DataFrame({"col": [1, 2]})
+    table._fallback_insert = MagicMock()  # Mock only _fallback_insert for this test
+    table._create_table_from_df = MagicMock()  # Mock table creation
 
-    df_clean = MagicMock()
-    df_clean.columns = ["col"]
-    head_df = MagicMock()
-    df_clean.head.return_value = head_df
-    table.serializer.return_value = (df_clean, [(1,), (2,)])
+    df_clean = pd.DataFrame({"col": [1, 2]})
+    table.serializer = MagicMock(return_value=(df_clean, [(1,), (2,)]))
 
     inspector = MagicMock()
     inspector.has_table.return_value = False
@@ -158,7 +171,7 @@ def test_create_uses_fast_executemany_and_skips_fallback(settings: MsSqlTableDat
         table.create(batch_size=99)  # batch_size should be ignored
 
     inspector.has_table.assert_called_once_with(settings.table_name, schema=settings.schema_name)
-    head_df.to_sql.assert_called_once()
+    table._create_table_from_df.assert_called_once()
     cursor.executemany.assert_called_once()
     raw_conn.commit.assert_called_once()
     raw_conn.close.assert_called_once()
@@ -208,12 +221,12 @@ def test_create_wraps_unsafe_identifier_error(settings: MsSqlTableDatasetSetting
 def test_create_falls_back_when_fast_path_fails(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     """Fallback to slow insert path when fast path fails."""
 
-    table = make_table(settings, linked_service)
+    table = make_table_with_real_methods(settings, linked_service)
     table.input = pd.DataFrame({"col": [1]})
 
-    df_clean = MagicMock()
-    df_clean.columns = ["col"]
-    table.serializer.return_value = (df_clean, [(1,)])
+    df_clean = pd.DataFrame({"col": [1]})
+    table.serializer = MagicMock(return_value=(df_clean, [(1,)]))
+    table._fallback_insert = MagicMock()  # Mock only _fallback_insert for this test
 
     inspector = MagicMock()
     inspector.has_table.return_value = True
@@ -222,7 +235,7 @@ def test_create_falls_back_when_fast_path_fails(settings: MsSqlTableDatasetSetti
     with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=inspector):
         table.create()
 
-    table._fallback_insert.assert_called_once_with(df_clean)
+    table._fallback_insert.assert_called_once()
 
 
 def test_update_delegates_to_create(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
@@ -358,3 +371,27 @@ def test_close_is_noop(settings: MsSqlTableDatasetSettings, linked_service: Magi
         table.close()
     except Exception as e:
         pytest.fail(f"MsSqlTable.close() raised an unexpected exception: {e}")
+
+
+def test_infer_sql_types_int32(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """Test that Int32Dtype maps to Integer."""
+
+    table = make_table(settings, linked_service)
+    df = pd.DataFrame({"col": pd.array([1, 2], dtype=pd.Int32Dtype())})
+    types = table._infer_sql_types(df)
+
+    assert "col" in types
+    assert isinstance(types["col"], Integer)
+
+
+def test_create_table_from_df_error(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """Test error handling when table creation fails."""
+    table = make_table(settings, linked_service)
+    df = pd.DataFrame({"id": [1, 2]})
+
+    # Mock the head() method to return df_mock with to_sql that fails
+    df_mock = MagicMock()
+    df_mock.to_sql.side_effect = Exception("Syntax error")
+
+    with patch.object(df, "head", return_value=df_mock), pytest.raises(CreateError, match="Failed to create table"):
+        table._create_table_from_df(df)

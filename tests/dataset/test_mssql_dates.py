@@ -128,5 +128,9 @@ def test_create_with_datetime_and_nat_and_check_schema(settings: MsSqlTableDatas
     assert rows[0] == (1, pd.Timestamp("2023-01-01 00:00:00"), 1.1)
     assert rows[1] == (2, None, None)
 
-    # Check the dtype argument passed to to_sql
-    assert to_sql_dtypes is None
+    # Check the dtype argument passed to to_sql - should be explicit mapping, not None
+    # This is the fix: we now use explicit SQL types instead of implicit inference
+    assert to_sql_dtypes is not None, "dtype should be explicit SQL type mapping, not None"
+    assert "id" in to_sql_dtypes
+    assert "timestamp" in to_sql_dtypes
+    assert "value" in to_sql_dtypes

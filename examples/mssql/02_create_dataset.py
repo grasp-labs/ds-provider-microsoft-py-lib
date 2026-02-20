@@ -17,6 +17,7 @@ and print the output after deletion.
 - Delete the entire table by setting `delete_table` to True in the dataset settings and calling the `delete()` method,
 then attempt to read from the dataset to confirm deletion.
 """
+
 import datetime
 import uuid
 
@@ -65,15 +66,19 @@ finally:
     print("Initial read:")
     print(row)
 
-dataset.input = pd.DataFrame({
-    "id": pd.Series([1, 2, 3, 4, 5, 6], dtype="Int64"),
-    "color": pd.Series(["Grays", "Red", "Blue", "Green", "Yellow", "Purple"], dtype="category"),
-    "dcoll": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05", "2024-01-06"]).tz_localize("UTC"),
-    "dtimes": [datetime.datetime.now() for _ in range(6)],
-    "active": pd.Series([True, False, True, True, False, True], dtype="boolean"),
-    "score": pd.Series([10.5, 8.2, 7.0, 9.1, 6.4, 5.5], dtype="float32"),
-    "delta": pd.to_timedelta(["1 days", "2 days", "3 days", "4 days", "5 days", "6 days"]),
-})
+dataset.input = pd.DataFrame(
+    {
+        "id": pd.Series([1, 2, 3, 4, 5, 6], dtype="Int64"),
+        "color": pd.Series(["Grays", "Red", "Blue", "Green", "Yellow", "Purple"], dtype="category"),
+        "dcoll": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05", "2024-01-06"]).tz_localize(
+            "UTC"
+        ),
+        "dtimes": [datetime.datetime.now() for _ in range(6)],
+        "active": pd.Series([True, False, True, True, False, True], dtype="boolean"),
+        "score": pd.Series([10.5, 8.2, 7.0, 9.1, 6.4, 5.5], dtype="float32"),
+        "delta": pd.to_timedelta(["1 days", "2 days", "3 days", "4 days", "5 days", "6 days"]),
+    }
+)
 dataset.create()
 
 dataset.read()
@@ -82,10 +87,12 @@ output = dataset.output
 print("Dataset created. The output of the dataset after creation is:")
 print(output)
 
-dataset.input = pd.DataFrame({
-    "id": [4, 5, 6],
-    "color": ["Green", "Yellow", "Purple"],
-})
+dataset.input = pd.DataFrame(
+    {
+        "id": [4, 5, 6],
+        "color": ["Green", "Yellow", "Purple"],
+    }
+)
 dataset.delete()
 print("delete() method called. The output of the dataset after deletion is:")
 dataset.read()
@@ -93,12 +100,13 @@ output = dataset.output
 
 print(output)
 
-dataset.input = pd.DataFrame({
-    "color": ["Red"],
-})
+dataset.input = pd.DataFrame(
+    {
+        "color": ["Red"],
+    }
+)
 dataset.delete()
-print("delete() method called. All rows matching the input should be removed. "
-      "The output of the dataset after deletion is:")
+print("delete() method called. All rows matching the input should be removed. The output of the dataset after deletion is:")
 
 dataset.read()
 output = dataset.output

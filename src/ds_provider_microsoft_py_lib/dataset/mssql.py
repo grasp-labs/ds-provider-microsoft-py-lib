@@ -404,6 +404,13 @@ class MsSqlTable(
 
     def _attempt_fast_bulk_insert(self, qualified_table: str, df_clean: pd.DataFrame, rows: list[tuple[Any, ...]]) -> bool:
         """
+        Args:
+            qualified_table: The safely quoted schema-qualified table name.
+            df_clean: The cleaned DataFrame.
+            rows: The list of row tuples to insert.
+        Returns:
+            bool
+
         Try to use pyodbc fast_executemany path. Returns True on success, False on failure.
 
         All values in rows are coerced to native Python types before insertion

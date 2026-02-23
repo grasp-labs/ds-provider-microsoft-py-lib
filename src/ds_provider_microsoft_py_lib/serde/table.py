@@ -10,12 +10,65 @@ Example:
 >>> cleaned_df, rows = serializer(data_frame)
 """
 
+import datetime as dt
+import json
 from typing import Any
 
 import numpy as np
 import pandas as pd
 from ds_resource_plugin_py_lib.common.serde.deserialize import DataDeserializer
 from ds_resource_plugin_py_lib.common.serde.serialize import DataSerializer
+
+
+def _coerce_value(value: Any) -> Any:
+    """
+    Normalize nested structures, datetimes, and scalar types for safe SQL Server insertion.
+
+    Handles:
+    - Nested dictionaries with datetime objects -> JSON string
+    - pd.Timestamp -> datetime.datetime
+    - NumPy/PyArrow scalars -> native Python types
+    - NaT, NaN, pd.NA -> None
+    """
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+
+    # Handle nested dictionaries with potential datetime objects
+    if isinstance(value, dict):
+        return json.dumps(value, default=_json_encoder)
+
+    # Convert pandas Timestamp to datetime.datetime
+    if isinstance(value, pd.Timestamp):
+        return value.to_pydatetime()
+
+    # Convert NumPy/PyArrow scalars to native Python types
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except (ValueError, TypeError):
+            pass
+
+    return value
+
+
+def _json_encoder(obj: Any) -> Any:
+    """JSON encoder for handling datetime and other non-serializable objects."""
+    if isinstance(obj, (dt.datetime, dt.date)):
+        return obj.isoformat()
+    if isinstance(obj, dt.timedelta):
+        return obj.total_seconds()
+    if isinstance(obj, (np.integer, np.floating, np.bool_)):
+        return obj.item()
+    # Handle pandas NA type
+    try:
+        if pd.isna(obj):
+            return None
+    except (TypeError, ValueError):
+        pass
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
 class MsSqlTableSerializer(DataSerializer):
@@ -37,6 +90,9 @@ class MsSqlTableSerializer(DataSerializer):
             return col_data.apply(lambda x: x.total_seconds() if pd.notna(x) else None)  # type: ignore[no-any-return]
         if pd.api.types.is_complex_dtype(col_data):
             return col_data.astype(str)
+        # Handle object dtype with nested structures (dicts, datetimes, etc.)
+        if col_data.dtype == object:
+            return col_data.apply(_coerce_value)  # type: ignore[no-any-return]
         return col_data
 
     def __call__(self, obj: pd.DataFrame, **_kwargs: Any) -> tuple[pd.DataFrame, list[tuple[Any, ...]]]:
@@ -47,13 +103,17 @@ class MsSqlTableSerializer(DataSerializer):
         suitable for pyodbc executemany.
         """
 
-        df_clean = obj.replace({np.nan: None, pd.NA: None, pd.NaT: None})
+        df_clean = obj.copy()
         for col in df_clean.columns:
             df_clean[col] = self._clean_column(df_clean[col])
-        # Use a copy cast to object dtype to ensure Python-native scalars (e.g., datetime.datetime)
-        # instead of NumPy scalars (e.g., numpy.datetime64) when materializing rows.
-        df_for_rows = df_clean.astype(object)
-        rows: list[tuple[Any, ...]] = list(df_for_rows.itertuples(index=False, name=None))
+
+        # Convert to object dtype to ensure Python-native scalars
+        df_clean = df_clean.astype(object)
+
+        # Replace all NA values (np.nan, pd.NaT, pd.NA) with None
+        df_clean = df_clean.where(pd.notna(df_clean), None)  # type: ignore[call-overload]
+
+        rows: list[tuple[Any, ...]] = list(df_clean.itertuples(index=False, name=None))
         return df_clean, rows
 
 

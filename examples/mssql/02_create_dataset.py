@@ -77,6 +77,17 @@ dataset.input = pd.DataFrame(
         "active": pd.Series([True, False, True, True, False, True], dtype="boolean"),
         "score": pd.Series([10.5, 8.2, 7.0, 9.1, 6.4, 5.5], dtype="float32"),
         "delta": pd.to_timedelta(["1 days", "2 days", "3 days", "4 days", "5 days", "6 days"]),
+        "metadata": pd.Series(
+            [
+                {"source": {"name:": "sensor1", "type": "high", "quantity" : 2, "timestamp": datetime.datetime.now()}, "type": "temperature"},
+                {"source": {"name:": "sensor2", "type": "low", "is_empty": pd.NA}, "type": "humidity"},
+                {"source": "sensor3", "type": "pressure"},
+                {"source": "sensor4", "type": "light"},
+                {"source": "sensor5", "type": "motion"},
+                {"source": "sensor6", "type": "sound"},
+            ],
+            dtype="object",
+        ),
     }
 )
 dataset.create()

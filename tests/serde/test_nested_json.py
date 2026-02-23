@@ -12,12 +12,18 @@ Tests the MsSqlTableSerializer's ability to:
 """
 
 import datetime
+import datetime as dt
 import json
 
 import numpy as np
 import pandas as pd
+import pytest
 
-from ds_provider_microsoft_py_lib.serde.table import MsSqlTableSerializer
+from ds_provider_microsoft_py_lib.serde.table import (
+    MsSqlTableSerializer,
+    _coerce_value,
+    _json_encoder,
+)
 
 
 class TestNestedJsonSerialization:
@@ -203,3 +209,131 @@ class TestNestedJsonSerialization:
         assert parsed2["name"] == "sensor2"
         assert parsed2["timestamp"] == "2024-01-15T10:30:45"
         assert parsed2["status"] is None
+
+    def test_coerce_value_with_pd_timestamp(self) -> None:
+        """Verify pd.Timestamp is converted to datetime.datetime."""
+        ts = pd.Timestamp("2024-01-15 10:30:45")
+        result = _coerce_value(ts)
+
+        assert isinstance(result, dt.datetime)
+        assert result.year == 2024
+        assert result.month == 1
+        assert result.day == 15
+        assert result.hour == 10
+        assert result.minute == 30
+        assert result.second == 45
+
+    def test_coerce_value_with_numpy_scalars(self) -> None:
+        """Verify NumPy scalars are converted via .item() method."""
+        # Test np.int64 with .item()
+        int_val = _coerce_value(np.int64(42))
+        assert isinstance(int_val, int)
+        assert int_val == 42
+
+        # Test np.float64 with .item()
+        float_val = _coerce_value(np.float64(3.14))
+        assert isinstance(float_val, float)
+        assert float_val == 3.14
+
+        # Test np.bool_ with .item()
+        bool_val = _coerce_value(np.bool_(True))
+        assert isinstance(bool_val, (bool, np.bool_))
+        assert bool_val
+
+    def test_coerce_value_exception_handling(self) -> None:
+        """Verify exception handling in _coerce_value when pd.isna() fails."""
+
+        # Test with object that has no .item() method
+        class CustomObject:
+            def __repr__(self) -> str:
+                return "CustomObject"
+
+        obj = CustomObject()
+        result = _coerce_value(obj)
+        assert result is obj  # Should return unchanged
+
+    def test_json_encoder_with_pd_na_exception_handling(self) -> None:
+        """Verify pd.NA exception handling in _json_encoder."""
+        # pd.NA should be converted to None
+        result = _json_encoder(pd.NA)
+        assert result is None
+
+    def test_json_encoder_with_various_na_types(self) -> None:
+        """Verify _json_encoder handles different NA types with pd.isna()."""
+
+        # Test pd.NA - should convert to None
+        result_na = _json_encoder(pd.NA)
+        assert result_na is None
+
+        # Test np.nan - should also convert to None via pd.isna()
+        result_nan = _json_encoder(np.nan)
+        assert result_nan is None
+
+    def test_nested_dict_with_pd_na_and_nan_in_json(self) -> None:
+        """Verify nested dict serialization with pd.NA and np.nan."""
+        serializer = MsSqlTableSerializer()
+
+        data = {
+            "id": [1],
+            "metadata": [
+                {
+                    "value1": pd.NA,
+                    "value3": "valid",
+                    "value4": 42,
+                    "timestamp": datetime.datetime(2024, 1, 15, 10, 30, 45),
+                }
+            ],
+        }
+        df = pd.DataFrame(data)
+
+        _, rows = serializer(df)
+
+        parsed = json.loads(rows[0][1])
+        assert parsed["value1"] is None
+        assert parsed["value3"] == "valid"
+        assert parsed["value4"] == 42
+        assert parsed["timestamp"] == "2024-01-15T10:30:45"
+
+    def test_coerce_value_pd_isna_exception(self) -> None:
+        """Verify exception handling when pd.isna() raises an exception."""
+
+        # Create an object that will cause pd.isna() to raise TypeError/ValueError
+        class ObjectThatThrowsOnIsna:
+            def __init__(self):
+                pass
+
+            def __array__(self):
+                raise TypeError("Cannot convert to array")
+
+        # pd.isna will try to check this and raise, but we catch it
+        obj = ObjectThatThrowsOnIsna()
+        result = _coerce_value(obj)
+        # Should return the object unchanged since exception is caught
+        assert result is obj
+
+    def test_coerce_value_item_method_raises(self) -> None:
+        """Verify exception handling when .item() method raises."""
+
+        # Create a mock object with .item() that raises ValueError
+        class MockObjectWithBadItem:
+            def item(self):
+                raise ValueError("Cannot convert to scalar")
+
+        obj = MockObjectWithBadItem()
+        result = _coerce_value(obj)
+        # Should return unchanged since exception is caught
+        assert result is obj
+
+    def test_json_encoder_exception_on_isna(self) -> None:
+        """Verify exception handling when pd.isna() raises in _json_encoder."""
+
+        # Create an object that will cause pd.isna() to raise
+        class ObjectThatThrowsOnIsna:
+            def __array__(self):
+                raise ValueError("Cannot convert to array")
+
+        obj = ObjectThatThrowsOnIsna()
+        # This should raise TypeError because object is not JSON serializable
+        # (after exception in pd.isna() is caught)
+        with pytest.raises(TypeError, match="not JSON serializable"):
+            _json_encoder(obj)

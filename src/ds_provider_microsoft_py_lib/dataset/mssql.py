@@ -21,7 +21,7 @@ Example:
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Generic, Literal, NoReturn, TypeVar, cast
+from typing import Any, Generic, Literal, TypeVar, cast
 
 import pandas as pd
 from ds_common_logger_py_lib import Logger
@@ -30,7 +30,14 @@ from ds_resource_plugin_py_lib.common.resource.dataset import (
     DatasetStorageFormatType,
     TabularDataset,
 )
-from ds_resource_plugin_py_lib.common.resource.dataset.errors import CreateError, DeleteError, ReadError
+from ds_resource_plugin_py_lib.common.resource.dataset.errors import (
+    CreateError,
+    DeleteError,
+    ListError,
+    PurgeError,
+    ReadError,
+)
+from ds_resource_plugin_py_lib.common.resource.errors import NotSupportedError
 from ds_resource_plugin_py_lib.common.resource.linked_service.errors import ConnectionError
 from ds_resource_plugin_py_lib.common.serde.deserialize import PandasDeserializer
 from ds_resource_plugin_py_lib.common.serde.serialize import PandasSerializer
@@ -189,58 +196,76 @@ class MsSqlTable(
             ConnectionError: If the connection fails.
             CreateError: If the create operation fails.
         """
+        # Per contract: Empty input is not an error, return immediately
+        if self.input is None or self.input.empty:
+            logger.debug("Empty input provided to create(); returning without action.")
+            return
+
         create_props = self.settings.create or CreateSettings()
 
-        if self.linked_service.connection is None:
-            raise ConnectionError(message="Connection pool is not initialized.")
-
-        if self.input is None or self.input.empty:
+        try:
+            connection = self.linked_service.connection
+        except ConnectionError as exc:
             raise CreateError(
-                message="Input is empty or None.",
-                status_code=400,
+                message=f"Connection not established: {exc.message}",
+                status_code=500,
                 details={
                     "table": self.settings.table,
                     "schema": self.settings.schema,
-                    "settings": self.settings.create,
                 },
-            )
+            ) from exc
 
         try:
             self.input.to_sql(
                 name=self.settings.table,
-                con=self.linked_service.connection,
+                con=connection,
                 schema=self.settings.schema,
                 if_exists=create_props.mode,
                 index=create_props.index,
                 dtype=cast("Any", self._pandas_dtype_to_sqlalchemy(self.input.dtypes)),
             )
-            self.output = self.input
-            self._set_schema(self.input)
+            # Per contract: Populate output with the affected rows (copy of input)
+            self.output = self.input.copy()
+            self._set_schema(self.output)
+            logger.info(f"Successfully created/inserted {len(self.output)} rows to {self.settings.schema}.{self.settings.table}")
         except Exception as exc:
+            logger.error(f"Failed to write data to table: {exc}", exc_info=True)
             raise CreateError(
-                message=f"Failed to write data to table: {exc!s}",
+                message=f"Failed to write data to table '{self.settings.schema}.{self.settings.table}': {exc!s}",
                 status_code=500,
                 details={
                     "table": self.settings.table,
                     "schema": self.settings.schema,
-                    "settings": create_props,
+                    "row_count": len(self.input),
                 },
             ) from exc
 
     def read(self, **_kwargs: Any) -> None:
         """
-        Read data from the specified endpoint.
+        Read data from the specified table.
+
+        Reads data from the configured table using optional filters,
+        column selection, and ordering.
 
         Args:
-            _kwargs: Additional keyword arguments to pass to the request.
+            _kwargs: Additional keyword arguments (ignored).
 
         Raises:
-            ConnectionError: If the connection fails.
-            ValueError: If specified columns, filters, or order_by columns don't exist.
+            ConnectionError: If the connection is not established.
             ReadError: If the read operation fails.
         """
-        if self.linked_service.connection is None:
-            raise ConnectionError(message="Connection pool is not initialized.")
+        try:
+            connection = self.linked_service.connection
+        except ConnectionError as exc:
+            raise ReadError(
+                message=f"Connection not established: {exc.message}",
+                status_code=500,
+                details={
+                    "table": self.settings.table,
+                    "schema": self.settings.schema,
+                },
+            ) from exc
+
         try:
             table = self._get_table()
         except NoSuchTableError as exc:
@@ -252,6 +277,7 @@ class MsSqlTable(
                     "schema": self.settings.schema,
                 },
             ) from exc
+
         read_props = self.settings.read
 
         stmt = self._build_select_columns(table, read_props)
@@ -261,120 +287,208 @@ class MsSqlTable(
         if read_props and read_props.limit is not None:
             stmt = stmt.limit(read_props.limit)
 
-        logger.debug(f"Executing query: {stmt}")
+        logger.debug(f"Executing read query: {stmt}")
         try:
             chunks = pd.read_sql(
                 stmt,
-                con=self.linked_service.connection,
+                con=connection,
                 chunksize=100_000,
                 dtype_backend="pyarrow",
             )
             self.output = pd.concat(list(chunks), ignore_index=True)
             self._set_schema(self.output)
+            logger.info(f"Successfully read {len(self.output)} rows from {self.settings.schema}.{self.settings.table}")
         except Exception as exc:
+            logger.error(f"Failed to read data from table: {exc}", exc_info=True)
             raise ReadError(
-                message=f"Failed to read data from table: {exc!s}",
+                message=f"Failed to read data from table '{self.settings.schema}.{self.settings.table}': {exc!s}",
                 status_code=500,
                 details={
                     "table": self.settings.table,
                     "schema": self.settings.schema,
-                    "query": stmt,
-                    "settings": read_props,
                 },
             ) from exc
 
     def purge(self, **_kwargs: Any) -> None:
-        if self.linked_service.connection is None:
-            raise ConnectionError(message="Connection pool is not initialized.")
-
-        try:
-            query = f"DROP TABLE IF EXISTS {quoted_name(self.settings.table, quote=True)};"
-            logger.debug(f"Dropping table: {quoted_name(self.settings.table, quote=True)}")
-
-            with self.linked_service.connection.connect() as conn:
-                conn.execute(text(query))
-                conn.commit()
-
-            logger.info(f"Successfully dropped table: {quoted_name(self.settings.table, quote=True)}")
-        except Exception as exc:
-            logger.error(f"Failed to delete table: {exc}", exc_info=True)
-            raise DeleteError(f"Failed to delete table: {exc!s}", details=self.get_details(), status_code=500) from exc
-
-    def delete(self, **_kwargs: Any) -> None:
         """
-        Delete rows matching the provided input using a WHERE clause.
+        Remove all content from the target table.
 
-        Args:
-            _kwargs: Additional keyword arguments.
-
-        Returns:
-            None
-
-        Raises:
-            DeleteError: If there is an error during deletion or if no input rows are provided when delete_table is False.
-        """
-        if self.input is None or getattr(self.input, "empty", True):
-            raise DeleteError("No input rows provided; refusing to delete all rows", details=self.get_details(), status_code=400)
-
-        df = self.input
-
-        # Use all columns present in the input row as match criteria
-        key_columns = list(df.columns)
-        # Map potentially unsafe column names to safe SQLAlchemy bind parameter names
-        param_map = {col: f"p{idx}" for idx, col in enumerate(key_columns)}
-        where_clause = " AND ".join(f"{self._quote_identifier(col)} = :{param_map[col]}" for col in key_columns)
-        delete_sql = text(f"DELETE FROM {quoted_name(self.settings.table, quote=True)} WHERE {where_clause}")  # nosec B608
-
-        # Build payloads using the safe parameter names
-        records = df.to_dict(orient="records")
-        payloads = [{param_map[col]: row[col] for col in key_columns} for row in records]
-        if self.linked_service.connection is None:
-            raise ConnectionError(message="Connection pool is not initialized.")
-        try:
-            with self.linked_service.connection.begin() as conn:
-                conn.execute(delete_sql, payloads)
-            logger.info(f"Successfully deleted {len(payloads)} rows from table: {quoted_name(self.settings.table, quote=True)}")
-        except Exception as exc:
-            logger.error(f"Failed to delete specific rows from table: {exc}", exc_info=True)
-            raise DeleteError(
-                f"Failed to delete specific rows from table: {exc!s}", details=self.get_details(), status_code=500
-            ) from exc
-
-    def update(self, **kwargs: Any) -> NoReturn:
-        raise NotImplementedError("Update operation is not supported for PostgreSQL datasets")
-
-    def rename(self, **kwargs: Any) -> NoReturn:
-        raise NotImplementedError("Rename operation is not supported for PostgreSQL datasets")
-
-    def close(self) -> None:
-        """
-        Close the dataset.
-        """
-        self.linked_service.close()
-
-    def list(self, **_kwargs: Any) -> None:
-        """
-        List all tables in the specified schema.
-
-        Uses SQLAlchemy's Inspector to reflect and retrieve all tables
-        in the configured schema.
+        Drops the entire table, leaving the structure empty. Per contract,
+        the target is empty after purge() returns. This is idempotent --
+        purging an already-empty (or non-existent) table is a no-op.
 
         Args:
             _kwargs: Additional keyword arguments (ignored).
 
         Raises:
-            ConnectionError: If the connection fails.
-            ReadError: If the list operation fails.
-
-        Returns:
-            None (Sets self.output to a DataFrame with table information)
+            ConnectionError: If the connection is not established.
+            PurgeError: If the purge operation fails.
         """
         try:
-            # Get the connection (will raise ConnectionError if not connected)
+            connection = self.linked_service.connection
+        except ConnectionError as exc:
+            raise PurgeError(
+                message=f"Connection not established: {exc.message}",
+                status_code=500,
+                details={
+                    "table": self.settings.table,
+                    "schema": self.settings.schema,
+                },
+            ) from exc
+
+        try:
+            # DROP TABLE IF EXISTS ensures idempotency
+            query = f"DROP TABLE IF EXISTS {quoted_name(self.settings.table, quote=True)};"
+            logger.debug(f"Dropping table: {self.settings.schema}.{self.settings.table}")
+
+            with connection.connect() as conn:
+                conn.execute(text(query))
+                conn.commit()
+
+            logger.info(f"Successfully purged table: {self.settings.schema}.{self.settings.table}")
+        except Exception as exc:
+            logger.error(f"Failed to purge table: {exc}", exc_info=True)
+            raise PurgeError(
+                message=f"Failed to purge table '{self.settings.schema}.{self.settings.table}': {exc!s}",
+                status_code=500,
+                details={
+                    "table": self.settings.table,
+                    "schema": self.settings.schema,
+                },
+            ) from exc
+
+    def delete(self, **_kwargs: Any) -> None:
+        """
+        Delete specific rows from the target table.
+
+        Removes only the rows in self.input, matched by all columns as identity.
+        Per contract: empty input is a no-op (returns immediately).
+        Deleting a row that does not exist is not an error.
+
+        Args:
+            _kwargs: Additional keyword arguments (ignored).
+
+        Raises:
+            ConnectionError: If the connection is not established.
+            DeleteError: If the delete operation fails.
+        """
+        # Per contract: Empty input is not an error, return immediately
+        if self.input is None or self.input.empty:
+            logger.debug("Empty input provided to delete(); returning without action.")
+            return
+
+        try:
+            connection = self.linked_service.connection
+        except ConnectionError as exc:
+            raise DeleteError(
+                message=f"Connection not established: {exc.message}",
+                status_code=500,
+                details={
+                    "table": self.settings.table,
+                    "schema": self.settings.schema,
+                },
+            ) from exc
+
+        try:
+            # Use all columns present in the input row as match criteria
+            key_columns = list(self.input.columns)
+
+            # Map potentially unsafe column names to safe SQLAlchemy bind parameter names
+            param_map = {col: f"p{idx}" for idx, col in enumerate(key_columns)}
+            where_clause = " AND ".join(f"{self._quote_identifier(col)} = :{param_map[col]}" for col in key_columns)
+            # Note: This is safe from SQL injection because:
+            # 1. Table name is quoted with quoted_name()
+            # 2. Column names are validated through _quote_identifier() which rejects unsafe characters
+            # 3. Values are passed as parameters, not interpolated into the SQL
+            delete_sql = text(f"DELETE FROM {quoted_name(self.settings.table, quote=True)} WHERE {where_clause}")  # nosec B608
+
+            # Build payloads using the safe parameter names
+            records = self.input.to_dict(orient="records")
+            payloads = [{param_map[col]: row[col] for col in key_columns} for row in records]
+
+            with connection.begin() as conn:
+                conn.execute(delete_sql, payloads)
+
+            # Per contract: Populate output with the affected rows (copy of input)
+            self.output = self.input.copy()
+            self._set_schema(self.output)
+            logger.info(f"Successfully deleted {len(payloads)} rows from {self.settings.schema}.{self.settings.table}")
+        except Exception as exc:
+            logger.error(f"Failed to delete rows from table: {exc}", exc_info=True)
+            raise DeleteError(
+                message=f"Failed to delete rows from table '{self.settings.schema}.{self.settings.table}': {exc!s}",
+                status_code=500,
+                details={
+                    "table": self.settings.table,
+                    "schema": self.settings.schema,
+                    "row_count": len(self.input),
+                },
+            ) from exc
+
+    def update(self, **_kwargs: Any) -> None:
+        """
+        Update existing rows in the target table.
+
+        This operation is not supported for SQL Server datasets at this time.
+
+        Args:
+            _kwargs: Additional keyword arguments (ignored).
+
+        Raises:
+            NotSupportedError: Always -- update is not supported.
+        """
+        raise NotSupportedError(
+            message="Update operation is not supported for SQL Server datasets.",
+            details={"table": self.settings.table, "schema": self.settings.schema},
+        )
+
+    def rename(self, **_kwargs: Any) -> None:
+        """
+        Rename a resource (table) in the backend.
+
+        This operation is not supported for SQL Server datasets at this time.
+
+        Args:
+            _kwargs: Additional keyword arguments (ignored).
+
+        Raises:
+            NotSupportedError: Always -- rename is not supported.
+        """
+        raise NotSupportedError(
+            message="Rename operation is not supported for SQL Server datasets.",
+            details={"table": self.settings.table, "schema": self.settings.schema},
+        )
+
+    def close(self) -> None:
+        """
+        Clean up the connection to the backend.
+
+        Per contract: must be safe to call multiple times and never raise.
+
+        Returns:
+            None
+        """
+        self.linked_service.close()
+
+    def list(self, **_kwargs: Any) -> None:
+        """
+        Discover available resources (tables) in the schema.
+
+        Uses SQLAlchemy's Inspector to reflect and retrieve all tables
+        in the configured schema with their metadata (type: table or view).
+
+        Args:
+            _kwargs: Additional keyword arguments (ignored).
+
+        Raises:
+            ConnectionError: If the connection is not established.
+            ListError: If the list operation fails.
+        """
+        try:
             connection = self.linked_service.connection
         except ConnectionError as exc:
             logger.error(f"Connection not established: {exc}", exc_info=True)
-            raise ReadError(
+            raise ListError(
                 message=f"Failed to list tables: {exc.message}",
                 status_code=500,
                 details={"schema": self.settings.schema},
@@ -383,13 +497,14 @@ class MsSqlTable(
         try:
             inspector = inspect(connection)
 
+            # Get all tables in the schema, sorted alphabetically
             table_names = sorted(inspector.get_table_names(schema=self.settings.schema))
+            view_names = set(inspector.get_view_names(schema=self.settings.schema))
 
+            # Build table info list with metadata
             tables_info = []
             for table_name in table_names:
-                is_view = table_name in inspector.get_view_names(schema=self.settings.schema)
-                table_type = "VIEW" if is_view else "BASE TABLE"
-
+                table_type = "VIEW" if table_name in view_names else "BASE TABLE"
                 tables_info.append(
                     {
                         "TABLE_SCHEMA": self.settings.schema,
@@ -398,19 +513,37 @@ class MsSqlTable(
                     }
                 )
 
+            # Per contract: self.output must be populated with discovered resources
             self.output = pd.DataFrame(tables_info)
             self._set_schema(self.output)
             logger.info(f"Successfully listed {len(self.output)} tables in schema: {self.settings.schema}")
+        except ListError:
+            # Re-raise our own exception type
+            raise
         except Exception as exc:
             logger.error(f"Failed to list tables in schema: {exc}", exc_info=True)
-            raise ReadError(
+            raise ListError(
                 message=f"Failed to list tables in schema '{self.settings.schema}': {exc!s}",
                 status_code=500,
                 details={"schema": self.settings.schema},
             ) from exc
 
-    def upsert(self) -> None:
-        raise NotImplementedError("Upsert operation is not supported for PostgreSQL datasets")
+    def upsert(self, **_kwargs: Any) -> None:
+        """
+        Insert or update rows in the target table.
+
+        This operation is not supported for SQL Server datasets at this time.
+
+        Args:
+            _kwargs: Additional keyword arguments (ignored).
+
+        Raises:
+            NotSupportedError: Always -- upsert is not supported.
+        """
+        raise NotSupportedError(
+            message="Upsert operation is not supported for SQL Server datasets.",
+            details={"table": self.settings.table, "schema": self.settings.schema},
+        )
 
     def _set_schema(self, content: pd.DataFrame) -> None:
         """
@@ -575,7 +708,8 @@ class MsSqlTable(
         return stmt.order_by(*order_clauses)
 
     def _quote_identifier(self, name: str) -> str:
-        """Quote identifiers safely for SQL Server using SQLAlchemy's identifier preparer.
+        """
+        Quote identifiers safely for SQL Server using SQLAlchemy's identifier preparer.
 
         Reject identifiers containing obvious injection primitives like quotes, semicolons,
         or brackets before quoting.
@@ -585,9 +719,11 @@ class MsSqlTable(
         """
         if re.search(r"[;\"'\[\]]", name):
             raise ValueError(f"Unsafe identifier: {name!r}")
-        if self.linked_service.connection is None:
-            raise ConnectionError(message="Connection pool is not initialized.")
-        preparer = self.linked_service.connection.dialect.identifier_preparer
+        try:
+            connection = self.linked_service.connection
+        except ConnectionError as exc:
+            raise ConnectionError(message="Connection not established.") from exc
+        preparer = connection.dialect.identifier_preparer
         return preparer.quote(name)
 
     def get_details(self) -> dict[str, Any]:

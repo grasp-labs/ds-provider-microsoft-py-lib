@@ -524,7 +524,7 @@ requires-dist = [
     { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.9.3" },
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "ds-common-logger-py-lib", specifier = ">=0.1.0a5,<1.0.0" },
-    { name = "ds-resource-plugin-py-lib", specifier = ">=0.1.0b1,<1.0.0" },
+    { name = "ds-resource-plugin-py-lib", specifier = ">=0.1.0rc1,<1.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.7.0" },
     { name = "numpy", specifier = ">=2.4.0,<2.5.0" },
     { name = "pandas", specifier = ">=2.0.0,<3.0.0" },
@@ -551,7 +551,7 @@ provides-extras = ["dev", "test", "docs"]
 
 [[package]]
 name = "ds-resource-plugin-py-lib"
-version = "0.1.0b1"
+version = "0.1.0rc1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "awswrangler" },
@@ -561,9 +561,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/40/bb/0e4dbca2e1aa0eec7d14f46ab6b16ab3746f333a20af8dbb06d9cae583ff/ds_resource_plugin_py_lib-0.1.0b1.tar.gz", hash = "sha256:05ff7153361cf8b90654ac12169f6328428093c59d28da10113c763069b9a8a8", size = 18895, upload-time = "2026-02-05T10:40:38.641Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b4/cb/6baf2b0d49f8764158a79b64eef23a7f081511bca66f5e02c8d9132d1890/ds_resource_plugin_py_lib-0.1.0rc1.tar.gz", hash = "sha256:ae27af3a31e4d8cc133fa25b8d0eb3bffaf768ec526f61100608098fb5cd87ba", size = 22463, upload-time = "2026-02-24T11:03:18.682Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/27/1e/67362fe17eb82ec1cb5af171cd1d34070f03c4f9d4965647ec4500942a61/ds_resource_plugin_py_lib-0.1.0b1-py3-none-any.whl", hash = "sha256:e6ed286d04985f2de3eda89a8d2bed92e9e8a07993fadf227f0c087b62dfa69a", size = 26234, upload-time = "2026-02-05T10:40:37.27Z" },
+    { url = "https://files.pythonhosted.org/packages/6b/04/dac0995c3e1ce1e58e7cb09c62e1a837877e9b1a33d9d3e5e3b2f7784de7/ds_resource_plugin_py_lib-0.1.0rc1-py3-none-any.whl", hash = "sha256:56e08d431393f5e4e225f6517c72af83b5776a8ac49c72d10f3721afdf2351cb", size = 31141, upload-time = "2026-02-24T11:03:17.7Z" },
 ]
 
 [[package]]

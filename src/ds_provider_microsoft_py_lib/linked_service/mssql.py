@@ -67,7 +67,7 @@ class MsSqlLinkedService(LinkedService[MsSqlLinkedServiceSettingsType], Generic[
     """
 
     settings: MsSqlLinkedServiceSettingsType
-    _engine: Engine | None = field(init=False, repr=False, compare=False, default=None)
+    connection: Engine | None = field(default=None, init=False, repr=False, metadata={"serialize": False})
 
     def check_settings_is_set(self) -> None:
         """
@@ -90,20 +90,6 @@ class MsSqlLinkedService(LinkedService[MsSqlLinkedServiceSettingsType], Generic[
              ResourceType
         """
         return ResourceType.MICROSOFT_SQL_LINKED_SERVICE
-
-    @property
-    def engine(self) -> Engine:
-        """
-        Get the Engine instance.
-
-        Returns:
-            Engine
-        Raises:
-            ConnectionError: If engine is not yet created.
-        """
-        if not self._engine:
-            raise ConnectionError("Engine is not yet created. Call connect() first.")
-        return self._engine
 
     def _get_connection_string(self) -> str:
         """
@@ -145,8 +131,11 @@ class MsSqlLinkedService(LinkedService[MsSqlLinkedServiceSettingsType], Generic[
         Returns:
             None
         """
+        if self.connection is not None:
+            return
+
         self.check_settings_is_set()
-        self._engine: Engine = self._create_engine()
+        self.connection: Engine = self._create_engine()
         logger.debug("Connected to Microsoft SQL Server.")
 
     def test_connection(self) -> tuple[bool, str]:
@@ -157,9 +146,13 @@ class MsSqlLinkedService(LinkedService[MsSqlLinkedServiceSettingsType], Generic[
             tuple[bool, str]
         """
         try:
-            if not self._engine:
+            if not self.connection:
                 self.connect()
-            with self.engine.connect() as conn:
+
+            if self.connection is None:
+                return False, "Failed to create engine"
+
+            with self.connection.connect() as conn:
                 result = conn.execute(text("SELECT 1"))
                 result.fetchone()
             return True, "Connection successfully tested"
@@ -174,6 +167,6 @@ class MsSqlLinkedService(LinkedService[MsSqlLinkedServiceSettingsType], Generic[
         Returns:
             None
         """
-        if self._engine:
-            self._engine.dispose()
+        if self.connection:
+            self.connection.dispose()
             logger.debug("Connection to SQL Server closed.")

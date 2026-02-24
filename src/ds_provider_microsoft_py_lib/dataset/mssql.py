@@ -207,7 +207,7 @@ class MsSqlTable(
         """
         create_props = self.settings.create or CreateSettings()
 
-        if self.linked_service.engine is None:
+        if self.linked_service.connection is None:
             raise ConnectionError(message="Connection pool is not initialized.")
 
         if self.input is None or self.input.empty:
@@ -224,7 +224,7 @@ class MsSqlTable(
         try:
             self.input.to_sql(
                 name=self.settings.table,
-                con=self.linked_service.engine,
+                con=self.linked_service.connection,
                 schema=self.settings.schema,
                 if_exists=create_props.mode,
                 index=create_props.index,
@@ -255,7 +255,7 @@ class MsSqlTable(
             ValueError: If specified columns, filters, or order_by columns don't exist.
             ReadError: If the read operation fails.
         """
-        if self.linked_service.engine is None:
+        if self.linked_service.connection is None:
             raise ConnectionError(message="Connection pool is not initialized.")
         try:
             table = self._get_table()
@@ -281,7 +281,7 @@ class MsSqlTable(
         try:
             chunks = pd.read_sql(
                 stmt,
-                con=self.linked_service.engine,
+                con=self.linked_service.connection,
                 chunksize=100_000,
                 dtype_backend="pyarrow",
             )
@@ -300,12 +300,15 @@ class MsSqlTable(
                 },
             ) from exc
 
-    def pruge(self, **_kwargs: Any) -> None:
+    def purge(self, **_kwargs: Any) -> None:
+        if self.linked_service.connection is None:
+            raise ConnectionError(message="Connection pool is not initialized.")
+
         try:
             query = f"DROP TABLE IF EXISTS {quoted_name(self.settings.table, quote=True)};"
             logger.debug(f"Dropping table: {quoted_name(self.settings.table, quote=True)}")
 
-            with self.linked_service.engine.connect() as conn:
+            with self.linked_service.connection.connect() as conn:
                 conn.execute(text(query))
                 conn.commit()
 
@@ -342,9 +345,10 @@ class MsSqlTable(
         # Build payloads using the safe parameter names
         records = df.to_dict(orient="records")
         payloads = [{param_map[col]: row[col] for col in key_columns} for row in records]
-
+        if self.linked_service.connection is None:
+            raise ConnectionError(message="Connection pool is not initialized.")
         try:
-            with self.linked_service.engine.begin() as conn:
+            with self.linked_service.connection.begin() as conn:
                 conn.execute(delete_sql, payloads)
             logger.info(f"Successfully deleted {len(payloads)} rows from table: {quoted_name(self.settings.table, quote=True)}")
         except Exception as exc:
@@ -364,6 +368,12 @@ class MsSqlTable(
         Close the dataset.
         """
         self.linked_service.close()
+
+    def list(self, **_kwargs: Any) -> NoReturn:
+        raise NotImplementedError("List operation is not supported for PostgreSQL datasets")
+
+    def upsert(self) -> None:
+        raise NotImplementedError("Upsert operation is not supported for PostgreSQL datasets")
 
     def _set_schema(self, content: pd.DataFrame) -> None:
         """
@@ -394,7 +404,7 @@ class MsSqlTable(
             table_name,
             metadata,
             schema=schema_name,
-            autoload_with=self.linked_service.engine,
+            autoload_with=self.linked_service.connection,
         )
 
     def _pandas_dtype_to_sqlalchemy(self, dtypes: pd.Series) -> dict[str, Any]:
@@ -541,7 +551,9 @@ class MsSqlTable(
         """
         if re.search(r"[;\"'\[\]]", name):
             raise ValueError(f"Unsafe identifier: {name!r}")
-        preparer = self.linked_service.engine.dialect.identifier_preparer
+        if self.linked_service.connection is None:
+            raise ConnectionError(message="Connection pool is not initialized.")
+        preparer = self.linked_service.connection.dialect.identifier_preparer
         return preparer.quote(name)
 
     def get_details(self) -> dict[str, Any]:

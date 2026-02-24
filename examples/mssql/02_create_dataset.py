@@ -121,7 +121,7 @@ output = dataset.output
 print(output)
 
 print("delete() method called. The output of the dataset after deletion is:")
-dataset.pruge()
+dataset.purge()
 
 try:
     dataset.read()

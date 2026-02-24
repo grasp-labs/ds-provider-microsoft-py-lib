@@ -51,6 +51,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.exc import NoSuchTableError
+from sqlalchemy.inspection import inspect
 from sqlalchemy.sql import Select
 
 from ..enums import ResourceType
@@ -355,8 +356,8 @@ class MsSqlTable(
         """
         List all tables in the specified schema.
 
-        Queries the SQL Server INFORMATION_SCHEMA.TABLES view to get all tables
-        in the configured schema and returns them as a pandas DataFrame.
+        Uses SQLAlchemy's Inspector to reflect and retrieve all tables
+        in the configured schema.
 
         Args:
             _kwargs: Additional keyword arguments (ignored).
@@ -368,37 +369,44 @@ class MsSqlTable(
         Returns:
             None (Sets self.output to a DataFrame with table information)
         """
-        if self.linked_service.connection is None:
-            raise ConnectionError(message="Connection pool is not initialized.")
+        try:
+            # Get the connection (will raise ConnectionError if not connected)
+            connection = self.linked_service.connection
+        except ConnectionError as exc:
+            logger.error(f"Connection not established: {exc}", exc_info=True)
+            raise ReadError(
+                message=f"Failed to list tables: {exc.message}",
+                status_code=500,
+                details={"schema": self.settings.schema},
+            ) from exc
 
         try:
-            query = text("""
-                SELECT \
-                    TABLE_SCHEMA,
-                    TABLE_NAME,
-                    TABLE_TYPE
-                FROM INFORMATION_SCHEMA.TABLES
-                WHERE TABLE_SCHEMA = :schema_name
-                ORDER BY TABLE_NAME
-            """)
+            inspector = inspect(connection)
 
-            df = pd.read_sql(
-                query,
-                con=self.linked_service.connection,
-                params={"schema_name": self.settings.schema},
-            )
+            table_names = sorted(inspector.get_table_names(schema=self.settings.schema))
 
-            self.output = df
+            tables_info = []
+            for table_name in table_names:
+                is_view = table_name in inspector.get_view_names(schema=self.settings.schema)
+                table_type = "VIEW" if is_view else "BASE TABLE"
+
+                tables_info.append(
+                    {
+                        "TABLE_SCHEMA": self.settings.schema,
+                        "TABLE_NAME": table_name,
+                        "TABLE_TYPE": table_type,
+                    }
+                )
+
+            self.output = pd.DataFrame(tables_info)
             self._set_schema(self.output)
-            logger.info(f"Successfully listed {len(df)} tables in schema: {self.settings.schema}")
+            logger.info(f"Successfully listed {len(self.output)} tables in schema: {self.settings.schema}")
         except Exception as exc:
             logger.error(f"Failed to list tables in schema: {exc}", exc_info=True)
             raise ReadError(
                 message=f"Failed to list tables in schema '{self.settings.schema}': {exc!s}",
                 status_code=500,
-                details={
-                    "schema": self.settings.schema,
-                },
+                details={"schema": self.settings.schema},
             ) from exc
 
     def upsert(self) -> None:
@@ -417,9 +425,6 @@ class MsSqlTable(
     def _get_table(self) -> Table:
         """
         Get the SQLAlchemy Table object for the configured schema and table.
-
-        Args:
-            None
 
         Returns:
             Table: The SQLAlchemy Table object.

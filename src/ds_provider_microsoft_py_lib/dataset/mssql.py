@@ -127,26 +127,9 @@ class CreateSettings:
 
 
 @dataclass(kw_only=True)
-class DeleteSettings:
-    """
-    Settings specific to the delete() operation.
-
-    These settings only apply when deleting data from the database
-    and do not affect other operations like:  create(), read(), update(), or rename().
-    """
-
-    delete_table: bool = False
-    """
-    If True, the entire table will be deleted when delete() is called.
-    If False, only the entities specified in the input will be deleted.
-    """
-
-
-@dataclass(kw_only=True)
 class MsSqlTableDatasetSettings(DatasetSettings):
     table: str
     schema: str
-    delete: DeleteSettings | None = None
     read: ReadSettings | None = None
     create: CreateSettings | None = None
 
@@ -287,7 +270,6 @@ class MsSqlTable(
             )
             self.output = pd.concat(list(chunks), ignore_index=True)
             self._set_schema(self.output)
-            self.next = False
         except Exception as exc:
             raise ReadError(
                 message=f"Failed to read data from table: {exc!s}",
@@ -369,8 +351,55 @@ class MsSqlTable(
         """
         self.linked_service.close()
 
-    def list(self, **_kwargs: Any) -> NoReturn:
-        raise NotImplementedError("List operation is not supported for PostgreSQL datasets")
+    def list(self, **_kwargs: Any) -> None:
+        """
+        List all tables in the specified schema.
+
+        Queries the SQL Server INFORMATION_SCHEMA.TABLES view to get all tables
+        in the configured schema and returns them as a pandas DataFrame.
+
+        Args:
+            _kwargs: Additional keyword arguments (ignored).
+
+        Raises:
+            ConnectionError: If the connection fails.
+            ReadError: If the list operation fails.
+
+        Returns:
+            None (Sets self.output to a DataFrame with table information)
+        """
+        if self.linked_service.connection is None:
+            raise ConnectionError(message="Connection pool is not initialized.")
+
+        try:
+            query = text("""
+                SELECT \
+                    TABLE_SCHEMA,
+                    TABLE_NAME,
+                    TABLE_TYPE
+                FROM INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_SCHEMA = :schema_name
+                ORDER BY TABLE_NAME
+            """)
+
+            df = pd.read_sql(
+                query,
+                con=self.linked_service.connection,
+                params={"schema_name": self.settings.schema},
+            )
+
+            self.output = df
+            self._set_schema(self.output)
+            logger.info(f"Successfully listed {len(df)} tables in schema: {self.settings.schema}")
+        except Exception as exc:
+            logger.error(f"Failed to list tables in schema: {exc}", exc_info=True)
+            raise ReadError(
+                message=f"Failed to list tables in schema '{self.settings.schema}': {exc!s}",
+                status_code=500,
+                details={
+                    "schema": self.settings.schema,
+                },
+            ) from exc
 
     def upsert(self) -> None:
         raise NotImplementedError("Upsert operation is not supported for PostgreSQL datasets")

@@ -24,8 +24,7 @@ import uuid
 import pandas as pd
 from ds_resource_plugin_py_lib.common.resource.dataset.errors import ReadError
 
-from ds_provider_microsoft_py_lib.dataset.mssql import MsSqlTableDatasetSettings, MsSqlTable, CreateSettings, \
-    DeleteSettings
+from ds_provider_microsoft_py_lib.dataset.mssql import MsSqlTableDatasetSettings, MsSqlTable, CreateSettings
 from ds_provider_microsoft_py_lib.linked_service.mssql import MsSqlLinkedService, MsSqlLinkedServiceSettings
 
 linked_service = MsSqlLinkedService(
@@ -49,10 +48,7 @@ dataset = MsSqlTable(
         create=CreateSettings(
                         mode="replace",
                         index=False,
-                    ),
-        delete=DeleteSettings(
-        delete_table=True
-        )
+                    )
     ),
     id=uuid.uuid4(),
     name="testmssqldataset",
@@ -73,6 +69,10 @@ except ReadError as exc:
 finally:
     print("Initial read:")
     print(row)
+
+dataset.list()
+print("List of tables in the database:")
+print(dataset.output)
 
 dataset.input = pd.DataFrame(
     {

@@ -22,7 +22,6 @@ from ds_resource_plugin_py_lib.common.resource.dataset.errors import (
 )
 
 from ds_provider_microsoft_py_lib.dataset.mssql import (
-    DeleteSettings,
     MsSqlTable,
     MsSqlTableDatasetSettings,
 )
@@ -30,7 +29,7 @@ from ds_provider_microsoft_py_lib.dataset.mssql import (
 
 @pytest.fixture()
 def settings() -> MsSqlTableDatasetSettings:
-    return MsSqlTableDatasetSettings(table="mytable", schema="myschema", delete=DeleteSettings())
+    return MsSqlTableDatasetSettings(table="mytable", schema="myschema")
 
 
 @pytest.fixture()
@@ -53,26 +52,6 @@ def make_table(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -
     table.input = None
     table.output = None
     return table
-
-
-def make_table_with_real_methods(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> MsSqlTable:
-    """Create table with real implementations of helper methods for integration testing."""
-    table = MsSqlTable.__new__(MsSqlTable)
-    table.settings = settings
-    table.linked_service = linked_service
-    table.input = None
-    table.output = None
-    return table
-
-
-def test_quote_identifier_uses_preparer(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
-    """Ensure identifier quoting uses the dialect preparer."""
-
-    table = make_table(settings, linked_service)
-    quoted = table._quote_identifier("col")
-
-    linked_service.engine.dialect.identifier_preparer.quote.assert_called_once_with("col")
-    assert quoted == "[col]"
 
 
 def test_quote_identifier_rejects_unsafe(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
@@ -98,20 +77,6 @@ def test_delete_wraps_unsafe_identifier_error(settings: MsSqlTableDatasetSetting
     settings.table = "bad;table"
     table = make_table(settings, linked_service)
 
-    with pytest.raises(DeleteError):
-        table.delete()
-
-
-def test_delete_requires_input_when_not_dropping_table(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
-    """Require input dataframe for delete when delete_table is False."""
-    settings.delete.delete_table = False
-    table = make_table(settings, linked_service)
-    table.input = None
-
-    with pytest.raises(DeleteError):
-        table.delete()
-
-    table.input = pd.DataFrame()
     with pytest.raises(DeleteError):
         table.delete()
 

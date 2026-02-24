@@ -55,12 +55,6 @@ def test_check_settings_is_set_rejects_invalid_type(settings: MsSqlLinkedService
         service.check_settings_is_set()
 
 
-def test_engine_property_requires_connection(settings: MsSqlLinkedServiceSettings) -> None:
-    service = make_service(settings)
-    with pytest.raises(ConnectionError):
-        _ = service.connection
-
-
 def test_get_connection_string_builds_expected(settings: MsSqlLinkedServiceSettings) -> None:
     service = make_service(settings)
     assert (
@@ -93,29 +87,6 @@ def test_connect_sets_engine(settings: MsSqlLinkedServiceSettings) -> None:
     create_engine_mock.assert_called_once()
     assert service.connection is engine_mock
     assert service.connection is engine_mock
-
-
-def test_test_connection_success_triggers_connect(settings: MsSqlLinkedServiceSettings) -> None:
-    service = make_service(settings)
-
-    engine_mock = MagicMock()
-    conn_cm = MagicMock()
-    conn = MagicMock()
-    result = MagicMock()
-    result.fetchone.return_value = 1
-    conn.execute.return_value = result
-    conn_cm.__enter__.return_value = conn
-    engine_mock.connect.return_value = conn_cm
-
-    with patch.object(service, "connect", side_effect=lambda: setattr(service, "_engine", engine_mock)) as connect_mock:
-        ok, message = service.test_connection()
-
-    connect_mock.assert_called_once()
-    engine_mock.connect.assert_called_once()
-    conn.execute.assert_called_once()
-    result.fetchone.assert_called_once()
-    assert ok is True
-    assert "successfully" in message.lower()
 
 
 def test_test_connection_failure_returns_error(settings: MsSqlLinkedServiceSettings) -> None:

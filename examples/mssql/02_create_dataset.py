@@ -24,7 +24,8 @@ import uuid
 import pandas as pd
 from ds_resource_plugin_py_lib.common.resource.dataset.errors import ReadError
 
-from ds_provider_microsoft_py_lib.dataset.mssql import MsSqlTableDatasetSettings, MsSqlTable
+from ds_provider_microsoft_py_lib.dataset.mssql import MsSqlTableDatasetSettings, MsSqlTable, CreateSettings, \
+    DeleteSettings
 from ds_provider_microsoft_py_lib.linked_service.mssql import MsSqlLinkedService, MsSqlLinkedServiceSettings
 
 linked_service = MsSqlLinkedService(
@@ -43,8 +44,15 @@ linked_service = MsSqlLinkedService(
 dataset = MsSqlTable(
     linked_service=linked_service,
     settings=MsSqlTableDatasetSettings(
-        table_name="my_table2",
-        schema_name="dbo",
+        table="my_table2",
+        schema="dbo",
+        create=CreateSettings(
+                        mode="replace",
+                        index=False,
+                    ),
+        delete=DeleteSettings(
+        delete_table=True
+        )
     ),
     id=uuid.uuid4(),
     name="testmssqldataset",
@@ -112,9 +120,8 @@ dataset.read()
 output = dataset.output
 print(output)
 
-dataset.settings.delete.delete_table = True
 print("delete() method called. The output of the dataset after deletion is:")
-dataset.delete()
+dataset.pruge()
 
 try:
     dataset.read()

@@ -8,8 +8,8 @@ Example:
 >>> dataset = MsSqlTable(
 ...    linked_service=MsSqlLinkedService(...),
 ...    settings=MsSqlTableDatasetSettings(
-...        table_name="your_table_name",
-...        schema_name="your_schema_name",
+...        table="your_table_name",
+...        schema="your_schema_name",
 ...        delete=DeleteSettings(delete_table=False)
 ...    )
 ... )

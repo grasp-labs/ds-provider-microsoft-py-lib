@@ -10,85 +10,120 @@ Example:
 >>> dataset = MsSqlTable(
 ...    linked_service=MsSqlLinkedService(...),
 ...    settings=MsSqlTableDatasetSettings(
-...        table_name="your_table_name",
-...        schema_name="your_schema_name",
+...        table="your_table_name",
+...        schema="your_schema_name",
 ...        delete=DeleteSettings(delete_table=False)
 ...    )
 ... )
 >>> dataset.read()
 """
 
-import json
 import re
-import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Generic, NoReturn, TypeVar
+from typing import Any, Generic, Literal, NoReturn, TypeVar, cast
 
 import pandas as pd
 from ds_common_logger_py_lib import Logger
 from ds_resource_plugin_py_lib.common.resource.dataset import (
     DatasetSettings,
+    DatasetStorageFormatType,
     TabularDataset,
 )
 from ds_resource_plugin_py_lib.common.resource.dataset.errors import CreateError, DeleteError, ReadError
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, Integer, String, inspect, text
+from ds_resource_plugin_py_lib.common.resource.linked_service.errors import ConnectionError
+from ds_resource_plugin_py_lib.common.serde.deserialize import PandasDeserializer
+from ds_resource_plugin_py_lib.common.serde.serialize import PandasSerializer
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Float,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    and_,
+    asc,
+    desc,
+    quoted_name,
+    select,
+    text,
+)
+from sqlalchemy.exc import NoSuchTableError
+from sqlalchemy.sql import Select
 
 from ..enums import ResourceType
 from ..linked_service.mssql import MsSqlLinkedService
-from ..serde.table import MsSqlTableDeserializer, MsSqlTableSerializer
 
 logger = Logger.get_logger(__name__, package=True)
 
 
-def _coerce_value(value: Any) -> Any:
+@dataclass(kw_only=True)
+class ReadSettings:
     """
-    Normalize pandas / numpy / pyarrow scalars for safe SQL Server insertion.
+    Settings specific to the read() operation.
 
-    This function ensures that all values are converted to native Python types
-    that map deterministically to SQL Server types. Pandas missing values
-    (NaT, NA, NaN) are converted to None (SQL NULL). Numpy and pyarrow scalars
-    are converted to native Python types via .item().
-
-    Args:
-        value: A scalar value that may be a pandas, numpy, or pyarrow type.
-
-    Returns:
-        A native Python type (int, float, str, bool, datetime.datetime, dict, list) or None.
-
-    Examples:
-        >>> _coerce_value(pd.NaT)
-        None
-        >>> _coerce_value(np.int64(42))
-        42
-        >>> _coerce_value(pd.Timestamp('2024-01-15 10:30:00'))
-        datetime.datetime(2024, 1, 15, 10, 30)
-        >>> _coerce_value({'key': 'value'})
-        '{"key": "value"}'
+    These settings only apply when reading data from the database
+    and do not affect create(), delete(), update(), or rename() operations.
     """
-    # Handle pandas / numpy missing values -> None (SQL NULL)
-    try:
-        if pd.isna(value):
-            return None
-    except (TypeError, ValueError):
-        pass
 
-    # Handle nested structures (dict/list) -> JSON string
-    if isinstance(value, (dict, list)):
-        return json.dumps(value)
+    limit: int | None = None
+    """The limit of the data to read."""
 
-    # Handle pandas Timestamp -> native datetime.datetime
-    if isinstance(value, pd.Timestamp):
-        return value.to_pydatetime()
+    columns: Sequence[str] | None = None
+    """
+    Specific columns to select. If None, selects all columns (*).
 
-    # Handle numpy / pyarrow scalar types -> native Python types via .item()
-    if hasattr(value, "item"):
-        try:
-            return value.item()
-        except (TypeError, ValueError):
-            pass
+    Example:
+        columns=["id", "name", "created_at"]
+    """
 
-    # Already a native Python type or unsupported; return as-is
-    return value
+    filters: dict[str, Any] | None = None
+    """
+    Dictionary of column filters for WHERE clause. Uses equality comparison.
+
+    Example:
+        filters={"status": "active", "amount": 100}
+
+    Multiple filters are combined with AND.
+    """
+
+    order_by: Sequence[str | tuple[str, str]] | None = None
+    """
+    Columns to order by. Can be:
+    - List of column names (defaults to ascending)
+    - List of (column_name, 'asc'/'desc') tuples
+
+    Example:
+        order_by=["created_at"]  # ascending
+        order_by=[("created_at", "desc"), "name"]  # created_at desc, name asc
+    """
+
+
+@dataclass(kw_only=True)
+class CreateSettings:
+    """
+    Settings specific to the create() operation.
+
+    These settings only apply when writing data to the database
+    and do not affect read(), delete(), update(), or rename() operations.
+    """
+
+    mode: Literal["fail", "append", "replace"] = "fail"
+    """
+    Write mode for the data.
+
+    Options:
+    - "fail": Raise an error if the table already exists.
+    - "append": Insert new rows (default). Creates table if it doesn't exist.
+    - "replace": Drop table if exists, recreate, then insert.
+    """
+
+    index: bool = False
+    """
+    Whether to include the index in the output.
+    """
 
 
 @dataclass(kw_only=True)
@@ -109,9 +144,11 @@ class DeleteSettings:
 
 @dataclass(kw_only=True)
 class MsSqlTableDatasetSettings(DatasetSettings):
-    table_name: str
-    schema_name: str
-    delete: DeleteSettings = field(default_factory=DeleteSettings)
+    table: str
+    schema: str
+    delete: DeleteSettings | None = None
+    read: ReadSettings | None = None
+    create: CreateSettings | None = None
 
 
 MsSqlTableDatasetSettingsType = TypeVar(
@@ -129,19 +166,19 @@ class MsSqlTable(
     TabularDataset[
         MsSqlLinkedServiceType,
         MsSqlTableDatasetSettingsType,
-        MsSqlTableSerializer,
-        MsSqlTableDeserializer,
+        PandasSerializer,
+        PandasDeserializer,
     ],
     Generic[MsSqlLinkedServiceType, MsSqlTableDatasetSettingsType],
 ):
     linked_service: MsSqlLinkedServiceType
     settings: MsSqlTableDatasetSettingsType
 
-    serializer: MsSqlTableSerializer = field(
-        default_factory=MsSqlTableSerializer,
+    serializer: PandasSerializer | None = field(
+        default_factory=lambda: PandasSerializer(format=DatasetStorageFormatType.JSON),
     )
-    deserializer: MsSqlTableDeserializer = field(
-        default_factory=MsSqlTableDeserializer,
+    deserializer: PandasDeserializer | None = field(
+        default_factory=lambda: PandasDeserializer(format=DatasetStorageFormatType.JSON),
     )
 
     @property
@@ -154,14 +191,344 @@ class MsSqlTable(
         """
         return ResourceType.MICROSOFT_SQL_DATASET
 
-    def _get_full_table_name(self) -> str:
+    def create(self, **_kwargs: Any) -> None:
         """
-        Get the fully qualified table name.
+        Create/write data to the specified table.
+
+        Writes self.input (pandas DataFrame) to the database table with the
+        configured create settings (mode, etc.).
+
+        Args:
+            _kwargs: Additional keyword arguments to pass to the request.
+
+        Raises:
+            ConnectionError: If the connection fails.
+            CreateError: If the create operation fails.
+        """
+        create_props = self.settings.create or CreateSettings()
+
+        if self.linked_service.engine is None:
+            raise ConnectionError(message="Connection pool is not initialized.")
+
+        if self.input is None or self.input.empty:
+            raise CreateError(
+                message="Input is empty or None.",
+                status_code=400,
+                details={
+                    "table": self.settings.table,
+                    "schema": self.settings.schema,
+                    "settings": self.settings.create,
+                },
+            )
+
+        try:
+            self.input.to_sql(
+                name=self.settings.table,
+                con=self.linked_service.engine,
+                schema=self.settings.schema,
+                if_exists=create_props.mode,
+                index=create_props.index,
+                dtype=cast("Any", self._pandas_dtype_to_sqlalchemy(self.input.dtypes)),
+            )
+            self.output = self.input
+            self._set_schema(self.input)
+        except Exception as exc:
+            raise CreateError(
+                message=f"Failed to write data to table: {exc!s}",
+                status_code=500,
+                details={
+                    "table": self.settings.table,
+                    "schema": self.settings.schema,
+                    "settings": create_props,
+                },
+            ) from exc
+
+    def read(self, **_kwargs: Any) -> None:
+        """
+        Read data from the specified endpoint.
+
+        Args:
+            _kwargs: Additional keyword arguments to pass to the request.
+
+        Raises:
+            ConnectionError: If the connection fails.
+            ValueError: If specified columns, filters, or order_by columns don't exist.
+            ReadError: If the read operation fails.
+        """
+        if self.linked_service.engine is None:
+            raise ConnectionError(message="Connection pool is not initialized.")
+        try:
+            table = self._get_table()
+        except NoSuchTableError as exc:
+            raise ReadError(
+                message=f"Table '{self.settings.schema}.{self.settings.table}' does not exist.",
+                status_code=404,
+                details={
+                    "table": self.settings.table,
+                    "schema": self.settings.schema,
+                },
+            ) from exc
+        read_props = self.settings.read
+
+        stmt = self._build_select_columns(table, read_props)
+        stmt = self._build_filters(stmt, table, read_props)
+        stmt = self._build_order_by(stmt, table, read_props)
+
+        if read_props and read_props.limit is not None:
+            stmt = stmt.limit(read_props.limit)
+
+        logger.debug(f"Executing query: {stmt}")
+        try:
+            chunks = pd.read_sql(
+                stmt,
+                con=self.linked_service.engine,
+                chunksize=100_000,
+                dtype_backend="pyarrow",
+            )
+            self.output = pd.concat(list(chunks), ignore_index=True)
+            self._set_schema(self.output)
+            self.next = False
+        except Exception as exc:
+            raise ReadError(
+                message=f"Failed to read data from table: {exc!s}",
+                status_code=500,
+                details={
+                    "table": self.settings.table,
+                    "schema": self.settings.schema,
+                    "query": stmt,
+                    "settings": read_props,
+                },
+            ) from exc
+
+    def pruge(self, **_kwargs: Any) -> None:
+        try:
+            query = f"DROP TABLE IF EXISTS {quoted_name(self.settings.table, quote=True)};"
+            logger.debug(f"Dropping table: {quoted_name(self.settings.table, quote=True)}")
+
+            with self.linked_service.engine.connect() as conn:
+                conn.execute(text(query))
+                conn.commit()
+
+            logger.info(f"Successfully dropped table: {quoted_name(self.settings.table, quote=True)}")
+        except Exception as exc:
+            logger.error(f"Failed to delete table: {exc}", exc_info=True)
+            raise DeleteError(f"Failed to delete table: {exc!s}", details=self.get_details(), status_code=500) from exc
+
+    def delete(self, **_kwargs: Any) -> None:
+        """
+        Delete rows matching the provided input using a WHERE clause.
+
+        Args:
+            _kwargs: Additional keyword arguments.
 
         Returns:
-             Schema.Table format
+            None
+
+        Raises:
+            DeleteError: If there is an error during deletion or if no input rows are provided when delete_table is False.
         """
-        return f"{self.settings.schema_name}.{self.settings.table_name}"
+        if self.input is None or getattr(self.input, "empty", True):
+            raise DeleteError("No input rows provided; refusing to delete all rows", details=self.get_details(), status_code=400)
+
+        df = self.input
+
+        # Use all columns present in the input row as match criteria
+        key_columns = list(df.columns)
+        # Map potentially unsafe column names to safe SQLAlchemy bind parameter names
+        param_map = {col: f"p{idx}" for idx, col in enumerate(key_columns)}
+        where_clause = " AND ".join(f"{self._quote_identifier(col)} = :{param_map[col]}" for col in key_columns)
+        delete_sql = text(f"DELETE FROM {quoted_name(self.settings.table, quote=True)} WHERE {where_clause}")  # nosec B608
+
+        # Build payloads using the safe parameter names
+        records = df.to_dict(orient="records")
+        payloads = [{param_map[col]: row[col] for col in key_columns} for row in records]
+
+        try:
+            with self.linked_service.engine.begin() as conn:
+                conn.execute(delete_sql, payloads)
+            logger.info(f"Successfully deleted {len(payloads)} rows from table: {quoted_name(self.settings.table, quote=True)}")
+        except Exception as exc:
+            logger.error(f"Failed to delete specific rows from table: {exc}", exc_info=True)
+            raise DeleteError(
+                f"Failed to delete specific rows from table: {exc!s}", details=self.get_details(), status_code=500
+            ) from exc
+
+    def update(self, **kwargs: Any) -> NoReturn:
+        raise NotImplementedError("Update operation is not supported for PostgreSQL datasets")
+
+    def rename(self, **kwargs: Any) -> NoReturn:
+        raise NotImplementedError("Rename operation is not supported for PostgreSQL datasets")
+
+    def close(self) -> None:
+        """
+        Close the dataset.
+        """
+        self.linked_service.close()
+
+    def _set_schema(self, content: pd.DataFrame) -> None:
+        """
+        Set the schema from the content.
+
+        Args:
+            content: The content to set the schema from.
+        """
+        converted = content.convert_dtypes(dtype_backend="pyarrow")
+        self.schema = {str(col): str(dtype) for col, dtype in converted.dtypes.to_dict().items()}
+
+    def _get_table(self) -> Table:
+        """
+        Get the SQLAlchemy Table object for the configured schema and table.
+
+        Args:
+            None
+
+        Returns:
+            Table: The SQLAlchemy Table object.
+        """
+        schema_name = quoted_name(self.settings.schema, quote=True)
+        table_name = quoted_name(self.settings.table, quote=True)
+
+        metadata = MetaData(schema=schema_name)
+
+        return Table(
+            table_name,
+            metadata,
+            schema=schema_name,
+            autoload_with=self.linked_service.engine,
+        )
+
+    def _pandas_dtype_to_sqlalchemy(self, dtypes: pd.Series) -> dict[str, Any]:
+        """
+        Convert pandas dtypes Series to a dict mapping column names to SQLAlchemy types.
+
+        Args:
+            dtypes: Pandas Series where index is column names and values are dtypes.
+
+        Returns:
+            dict[str, Any]: Dictionary mapping column names to SQLAlchemy types.
+        """
+        dtype_map: dict[str, Any] = {}
+
+        for col_name, dtype in dtypes.items():
+            col_name_str = str(col_name)
+
+            if pd.api.types.is_integer_dtype(dtype):
+                if hasattr(dtype, "itemsize") and dtype.itemsize <= 2:
+                    dtype_map[col_name_str] = Integer()
+                else:
+                    dtype_map[col_name_str] = BigInteger()
+            elif pd.api.types.is_float_dtype(dtype):
+                dtype_map[col_name_str] = Float()
+            elif pd.api.types.is_bool_dtype(dtype):
+                dtype_map[col_name_str] = Boolean()
+            elif pd.api.types.is_datetime64_any_dtype(dtype):
+                dtype_map[col_name_str] = DateTime()
+            elif pd.api.types.is_string_dtype(dtype) or isinstance(dtype, pd.CategoricalDtype):
+                dtype_map[col_name_str] = String(length=255)
+            else:
+                dtype_map[col_name_str] = String(length=255)
+
+        return dtype_map
+
+    def _validate_column(self, table: Table, column_name: str) -> None:
+        """
+        Validate that a column exists in the table.
+
+        Args:
+            table: The SQLAlchemy Table object.
+            column_name: The name of the column to validate.
+
+        Raises:
+            ValueError: If the column doesn't exist in the table.
+        """
+        if column_name not in table.c:
+            available_columns = list(table.c.keys())
+            raise ValueError(
+                f"Column '{column_name}' not found in table '{self.settings.table}'. Available columns: {available_columns}"
+            )
+
+    def _build_select_columns(self, table: Table, read_props: ReadSettings | None) -> Select[Any]:
+        """
+        Build the SELECT clause of the query.
+
+        Args:
+            table: The SQLAlchemy Table object.
+            read_props: Read-specific settings.
+
+        Returns:
+            Select: The SELECT statement with specified columns or all columns.
+
+        Raises:
+            ValueError: If any specified column doesn't exist in the table.
+        """
+        if read_props and read_props.columns:
+            for col_name in read_props.columns:
+                self._validate_column(table, col_name)
+
+            selected_columns = [table.c[col_name] for col_name in read_props.columns]
+            return select(*selected_columns)
+
+        return select(table)
+
+    def _build_filters(self, stmt: Select[Any], table: Table, read_props: ReadSettings | None) -> Select[Any]:
+        """
+        Build the WHERE clause of the query from filters.
+
+        Args:
+            stmt: The current SELECT statement.
+            table: The SQLAlchemy Table object.
+            read_props: Read-specific settings.
+
+        Returns:
+            Select: The SELECT statement with WHERE clause applied.
+
+        Raises:
+            ValueError: If any filter column doesn't exist in the table.
+        """
+        if not read_props or not read_props.filters:
+            return stmt
+
+        for col_name in read_props.filters:
+            self._validate_column(table, col_name)
+
+        filter_conditions = [table.c[col_name] == value for col_name, value in read_props.filters.items()]
+
+        return stmt.where(and_(*filter_conditions))
+
+    def _build_order_by(self, stmt: Select[Any], table: Table, read_props: ReadSettings | None) -> Select[Any]:
+        """
+        Build the ORDER BY clause of the query.
+
+        Args:
+            stmt: The current SELECT statement.
+            table: The SQLAlchemy Table object.
+            read_props: Read-specific settings.
+
+        Returns:
+            Select: The SELECT statement with ORDER BY clause applied.
+
+        Raises:
+            ValueError: If any order_by column doesn't exist in the table.
+        """
+        if not read_props or not read_props.order_by:
+            return stmt
+
+        order_clauses = []
+        for order_spec in read_props.order_by:
+            if isinstance(order_spec, tuple):
+                col_name, direction = order_spec
+                self._validate_column(table, col_name)
+
+                col = table.c[col_name]
+                if direction.lower() == "desc":
+                    order_clauses.append(desc(col))
+                else:
+                    order_clauses.append(asc(col))
+            else:
+                self._validate_column(table, order_spec)
+                order_clauses.append(asc(table.c[order_spec]))
+
+        return stmt.order_by(*order_clauses)
 
     def _quote_identifier(self, name: str) -> str:
         """Quote identifiers safely for SQL Server using SQLAlchemy's identifier preparer.
@@ -177,403 +544,6 @@ class MsSqlTable(
         preparer = self.linked_service.engine.dialect.identifier_preparer
         return preparer.quote(name)
 
-    def _qualified_table(self) -> str:
-        """
-        Return a safely quoted schema-qualified table name.
-
-        Returns:
-                str: The safely quoted schema-qualified table name.
-        """
-
-        schema = self._quote_identifier(self.settings.schema_name)
-        table = self._quote_identifier(self.settings.table_name)
-        return f"{schema}.{table}"
-
-    def read(self, **_kwargs: Any) -> None:
-        """
-        Read data from SQL Server table.
-
-        Args:
-          _kwargs: Additional keyword arguments.
-
-        Returns:
-              None
-
-        Raises:
-            ReadError: If the table does not exist or if there is an error during reading.
-        """
-        table_name = self._get_full_table_name()
-        logger.debug(f"Reading from table: {table_name}")
-        try:
-            self.output = pd.read_sql_table(
-                table_name=self.settings.table_name,
-                con=self.linked_service.engine,
-                schema=self.settings.schema_name,
-                **_kwargs,
-            )
-            logger.info(f"Read {len(self.output)} rows from MSSQL")
-        except ValueError as exc:
-            # pandas raises ValueError when the table does not exist
-            raise ReadError(
-                f"Table {table_name} not found in schema {self.settings.schema_name}",
-                status_code=404,
-                details=self.get_details(),
-            ) from exc
-        except Exception as exc:
-            logger.error(f"Failed to read from MSSQL: {exc}", exc_info=True)
-            raise ReadError(f"Failed to read from MSSQL: {exc!s}", details=self.get_details(), status_code=500) from exc
-
-    def create(self, **_kwargs: Any) -> None:
-        """
-        Write data to SQL Server table.
-        Appends data to existing table (like ADF copy activity).
-
-        Args:
-          _kwargs: Additional keyword arguments.
-
-        Returns:
-              None
-
-        Raises:
-            CreateError: If there is an error during writing to the database.
-        """
-        try:
-            _kwargs.pop("batch_size", None)
-
-            table_name, df, row_count, col_count = self._prepare_write()
-            df_clean, rows = self.serializer(df)
-            self._log_write_start(table_name, row_count, col_count)
-
-            start_time = time.time()
-
-            # Check if table exists first
-            inspector = inspect(self.linked_service.engine)
-            table_exists = inspector.has_table(
-                self.settings.table_name,
-                schema=self.settings.schema_name,
-            )
-            logger.info(f"Table exists: {table_exists}")
-
-            if not table_exists:
-                self._create_table_from_df(df_clean)
-
-            logger.info("Using fast_executemany for bulk insert...")
-
-            fast_path_succeeded = False
-            try:
-                qualified_table = self._qualified_table()
-            except ValueError as exc:
-                raise CreateError(
-                    f"Invalid table name or schema name: {exc}",
-                    details=self.get_details(),
-                    status_code=400,
-                ) from exc
-
-            try:
-                fast_path_succeeded = self._attempt_fast_bulk_insert(qualified_table, df_clean, rows)
-            except Exception:
-                logger.warning(
-                    "fast_executemany bulk insert failed, falling back to pandas.to_sql append",
-                    exc_info=True,
-                )
-
-            if not fast_path_succeeded:
-                self._fallback_insert(df_clean, **_kwargs)
-
-            elapsed = time.time() - start_time
-            logger.info(f"Successfully wrote {row_count} rows to {table_name} in {elapsed:.2f}s")
-            logger.info(f"   Throughput: {row_count / elapsed:.0f} rows/sec")
-        except CreateError as err:
-            logger.error(f"Failed to write to MSSQL: {err}", exc_info=True)
-            raise
-        except Exception as exc:
-            logger.error(f"Failed to write to MSSQL: {exc}", exc_info=True)
-            raise CreateError(f"Failed to write to MSSQL: {exc!s}", details=self.get_details(), status_code=500) from exc
-
-    def _prepare_write(self) -> tuple[str, pd.DataFrame, int, int]:
-        table_name = self._get_full_table_name()
-        df = self.input
-        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-            raise CreateError(
-                "Input DataFrame must be a non-empty pandas.DataFrame for create operation.",
-                details=self.get_details(),
-                status_code=422,
-            )
-        row_count, col_count = df.shape
-        return table_name, df, row_count, col_count
-
-    @staticmethod
-    def _infer_sql_types(df: pd.DataFrame) -> dict[str, Any]:
-        """
-        Infer explicit SQL Server types from DataFrame dtypes.
-
-        This builds a SQLAlchemy dtype mapping that avoids implicit inference
-        by pandas.to_sql(). Each column dtype is explicitly mapped to a SQL type
-        based on pandas dtype inspection.
-
-        Args:
-            df: The DataFrame to inspect.
-
-        Returns:
-            A dict suitable for passing to df.to_sql(dtype=...) with explicit types.
-
-        Mappings:
-            - int64 (nullable) -> BIGINT
-            - int32 (nullable) -> INT
-            - float64 -> FLOAT
-            - bool -> BIT
-            - object (string-like) -> NVARCHAR(MAX)
-            - datetime64[ns] -> DATETIME2(7)
-            - datetime64[ns, UTC] -> DATETIME2(7)
-        """
-
-        dtype_map: dict[str, Any] = {}
-
-        for col in df.columns:
-            dtype = df[col].dtype
-            dtype_str = str(dtype).lower()
-
-            logger.debug(f"Column {col}: pandas dtype = {dtype}")
-
-            # Nullable integer types
-            if dtype == "Int64" or dtype == pd.Int64Dtype():
-                dtype_map[col] = BigInteger()
-            elif dtype == "Int32" or dtype == pd.Int32Dtype():
-                dtype_map[col] = Integer()
-            # Numpy integer types
-            elif "int64" in dtype_str:
-                dtype_map[col] = BigInteger()
-            elif "int32" in dtype_str or "int" in dtype_str:
-                dtype_map[col] = Integer()
-            # Float
-            elif "float" in dtype_str:
-                dtype_map[col] = Float()
-            # Boolean
-            elif "bool" in dtype_str:
-                dtype_map[col] = Boolean()
-            # Datetime
-            elif "datetime64" in dtype_str:
-                dtype_map[col] = DateTime()
-            # String / object
-            elif dtype == "string" or dtype == pd.StringDtype() or "object" in dtype_str:
-                # Use VARCHAR(MAX) which pandas maps to NVARCHAR(MAX) on SQL Server
-                dtype_map[col] = String()
-            else:
-                logger.warning(f"Column {col}: No explicit type mapping for dtype {dtype}; will use pandas inference")
-
-        return dtype_map
-
-    def _create_table_from_df(self, df_clean: pd.DataFrame) -> None:
-        """
-        Create table using explicit SQL type mapping.
-
-        Instead of relying on pandas.to_sql() implicit type inference,
-        we build an explicit dtype mapping from the DataFrame and pass it
-        to to_sql(). This ensures deterministic, predictable column types.
-
-        Args:
-            df_clean: The cleaned DataFrame.
-
-        Raises:
-            CreateError: If table creation fails.
-        """
-        try:
-            # Build explicit SQL type mapping
-            explicit_types = self._infer_sql_types(df_clean)
-
-            logger.info(f"Creating table with explicit types: {explicit_types}")
-
-            # Create table with explicit dtype mapping
-            df_clean.head(0).to_sql(
-                name=self.settings.table_name,
-                con=self.linked_service.engine,
-                schema=self.settings.schema_name,
-                if_exists="fail",
-                index=False,
-                dtype=explicit_types,  # type: ignore[arg-type]
-            )
-
-            logger.info("Table created successfully with explicit type mapping")
-        except Exception as exc:
-            logger.error(f"Failed to create table: {exc}", exc_info=True)
-            raise CreateError(
-                f"Failed to create table: {exc!s}",
-                details=self.get_details(),
-                status_code=500,
-            ) from exc
-
-    def _attempt_fast_bulk_insert(self, qualified_table: str, df_clean: pd.DataFrame, rows: list[tuple[Any, ...]]) -> bool:
-        """
-        Args:
-            qualified_table: The safely quoted schema-qualified table name.
-            df_clean: The cleaned DataFrame.
-            rows: The list of row tuples to insert.
-        Returns:
-            bool
-
-        Try to use pyodbc fast_executemany path. Returns True on success, False on failure.
-
-        All values in rows are coerced to native Python types before insertion
-        to avoid silent type changes by the database driver.
-        """
-        raw_conn = self.linked_service.engine.raw_connection()
-        try:
-            cursor = raw_conn.cursor()
-            cursor.fast_executemany = True  # type: ignore[attr-defined] # Enable fast bulk insert
-
-            # Build INSERT statement
-            columns = ", ".join([self._quote_identifier(col) for col in df_clean.columns])
-            placeholders = ", ".join(["?" for _ in df_clean.columns])
-            # Identifiers are validated/quoted; values are parameterized placeholders.
-            insert_sql = f"INSERT INTO {qualified_table} ({columns}) VALUES ({placeholders})"  # nosec B608
-
-            logger.info("Executing bulk insert with fast_executemany...")
-
-            # Coerce all values in rows to native Python types before insertion
-            coerced_rows = [tuple(_coerce_value(val) for val in row) for row in rows]
-
-            logger.debug(f"Sample coerced row: {coerced_rows[0] if coerced_rows else 'N/A'}")
-
-            # Execute bulk insert
-            cursor.executemany(insert_sql, coerced_rows)
-            raw_conn.commit()
-
-            logger.info("Bulk insert completed")
-            return True
-
-        finally:
-            raw_conn.close()
-
-    @staticmethod
-    def _log_write_start(table_name: str, rows: int, cols: int) -> None:
-        logger.info("Starting MSSQL write operation:")
-        logger.info(f"   Table: {table_name}")
-        logger.info(f"   Rows: {rows}")
-        logger.info(f"   Columns: {cols}")
-
-    def _fallback_insert(self, df_clean: pd.DataFrame, **_kwargs: Any) -> None:
-        """
-        Append rows via pandas.to_sql as a safe fallback path.
-
-        Uses explicit SQL type mapping to avoid implicit type inference by pandas.
-        This is a fallback when fast_executemany fails.
-
-        Returns:
-            None
-        """
-        try:
-            # Build explicit SQL type mapping
-            explicit_types = self._infer_sql_types(df_clean)
-
-            logger.info("Appending rows via pandas to_sql with explicit type mapping (fallback)")
-            df_clean.to_sql(
-                name=self.settings.table_name,
-                con=self.linked_service.engine,
-                schema=self.settings.schema_name,
-                if_exists="append",
-                index=False,
-                method="multi",
-                dtype=explicit_types,  # type: ignore[arg-type]
-                **_kwargs,
-            )
-            logger.info("Fallback insert completed")
-        except Exception as exc:
-            logger.error(f"Fallback insert failed: {exc}", exc_info=True)
-            raise CreateError(
-                f"Fallback insert failed: {exc!s}",
-                details=self.get_details(),
-                status_code=500,
-            ) from exc
-
-    def update(self, **_kwargs: Any) -> None:
-        """
-        Update data in SQL Server table.
-        For clone/copy workflow, this appends data (same as create).
-
-        Args:
-            _kwargs: Additional keyword arguments.
-
-        Returns:
-             None
-        """
-        # For clone/copy, update = create (just append data)
-        self.create(**_kwargs)
-
-    def delete(self, **_kwargs: Any) -> None:
-        """
-        Delete rows matching the provided input using a WHERE clause.
-
-        Args:
-            _kwargs: Additional keyword arguments.
-
-        Returns:
-            None
-
-        Raises:
-            DeleteError: If there is an error during deletion or if no input rows are provided when delete_table is False.
-        """
-        try:
-            table_name = self._qualified_table()
-        except ValueError as exc:
-            raise DeleteError(f"Cannot delete table: {exc}", details=self.get_details(), status_code=400) from exc
-
-        if self.settings.delete.delete_table:
-            try:
-                query = f"DROP TABLE IF EXISTS {table_name}"
-                logger.debug(f"Dropping table: {table_name}")
-
-                with self.linked_service.engine.connect() as conn:
-                    conn.execute(text(query))
-                    conn.commit()
-
-                logger.info(f"Successfully dropped table: {table_name}")
-            except Exception as exc:
-                logger.error(f"Failed to delete table: {exc}", exc_info=True)
-                raise DeleteError(f"Failed to delete table: {exc!s}", details=self.get_details(), status_code=500) from exc
-        else:
-            if self.input is None or getattr(self.input, "empty", True):
-                raise DeleteError(
-                    "No input rows provided; refusing to delete all rows", details=self.get_details(), status_code=400
-                )
-
-            df = self.input
-
-            # Use all columns present in the input row as match criteria
-            key_columns = list(df.columns)
-            # Map potentially unsafe column names to safe SQLAlchemy bind parameter names
-            param_map = {col: f"p{idx}" for idx, col in enumerate(key_columns)}
-            where_clause = " AND ".join(f"{self._quote_identifier(col)} = :{param_map[col]}" for col in key_columns)
-            delete_sql = text(f"DELETE FROM {table_name} WHERE {where_clause}")  # nosec B608
-
-            # Build payloads using the safe parameter names
-            records = df.to_dict(orient="records")
-            payloads = [{param_map[col]: row[col] for col in key_columns} for row in records]
-
-            try:
-                with self.linked_service.engine.begin() as conn:
-                    conn.execute(delete_sql, payloads)
-                logger.info(f"Successfully deleted {len(payloads)} rows from table: {table_name}")
-            except Exception as exc:
-                logger.error(f"Failed to delete specific rows from table: {exc}", exc_info=True)
-                raise DeleteError(
-                    f"Failed to delete specific rows from table: {exc!s}", details=self.get_details(), status_code=500
-                ) from exc
-
-    def rename(self, **_kwargs: Any) -> NoReturn:
-        """
-        Rename operation is not directly supported.
-        Use SQL ALTER TABLE statements via update method.
-
-        Raises:
-            NotImplementedError: Always raised to indicate that rename is not supported.
-        """
-        raise NotImplementedError(
-            "Rename operation is not directly supported. Use SQL ALTER TABLE statements via the update method with a custom query."
-        )
-
-    def close(self) -> None:
-        pass
-
     def get_details(self) -> dict[str, Any]:
         """
         Get details about the dataset.
@@ -582,9 +552,8 @@ class MsSqlTable(
             dict[str, Any]
         """
         details: dict[str, Any] = {
-            "table_name": self.settings.table_name,
-            "schema_name": self.settings.schema_name,
-            "delete_table": self.settings.delete.delete_table,
+            "table_name": self.settings.table,
+            "schema_name": self.settings.schema,
         }
 
         read_settings = getattr(self.settings, "read", None)

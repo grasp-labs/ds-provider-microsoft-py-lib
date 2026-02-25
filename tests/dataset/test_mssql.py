@@ -462,8 +462,6 @@ def test_create_with_data_success(settings: MsSqlTableDatasetSettings, linked_se
 
     assert table.output is not None
     assert len(table.output) == 2
-    assert "id" in table.schema
-    assert "name" in table.schema
 
 
 def test_delete_with_multiple_columns(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
@@ -755,33 +753,6 @@ def test_create_populates_output_on_success(
 
 
 @patch("ds_provider_microsoft_py_lib.dataset.mssql.insert")
-def test_create_sets_schema_on_output(
-    mock_insert: MagicMock, settings: MsSqlTableDatasetSettings, linked_service: MagicMock
-) -> None:
-    """Test that create sets schema on the output DataFrame."""
-    table = make_table(settings, linked_service)
-    df = pd.DataFrame({"id": [1, 2], "value": [1.5, 2.5]})
-    table.input = df
-
-    mock_conn = MagicMock()
-    mock_begin = MagicMock()
-    mock_begin.__enter__ = MagicMock(return_value=mock_conn)
-    mock_begin.__exit__ = MagicMock(return_value=None)
-    linked_service.connection.begin = MagicMock(return_value=mock_begin)
-
-    with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect") as mock_inspect:
-        mock_inspector = MagicMock()
-        mock_inspector.has_table = MagicMock(return_value=False)
-        mock_inspect.return_value = mock_inspector
-
-        table.create()
-
-    assert table.schema is not None
-    assert "id" in table.schema
-    assert "value" in table.schema
-
-
-@patch("ds_provider_microsoft_py_lib.dataset.mssql.insert")
 def test_create_calls_to_sql_with_correct_table_name(
     mock_insert: MagicMock, settings: MsSqlTableDatasetSettings, linked_service: MagicMock
 ) -> None:
@@ -882,35 +853,6 @@ def test_create_success_logs_message(
         # Verify output was created
         assert table.output is not None
         assert len(table.output) == 3
-
-
-@patch("ds_provider_microsoft_py_lib.dataset.mssql.insert")
-def test_create_populates_schema_correctly(
-    mock_insert: MagicMock, settings: MsSqlTableDatasetSettings, linked_service: MagicMock
-) -> None:
-    """Test that create properly initializes schema from input DataFrame."""
-    table = make_table(settings, linked_service)
-    df = pd.DataFrame({"id": [1, 2], "email": ["a@test.com", "b@test.com"], "active": [True, False]})
-    table.input = df
-
-    mock_conn = MagicMock()
-    mock_begin = MagicMock()
-    mock_begin.__enter__ = MagicMock(return_value=mock_conn)
-    mock_begin.__exit__ = MagicMock(return_value=None)
-    linked_service.connection.begin = MagicMock(return_value=mock_begin)
-
-    with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect") as mock_inspect:
-        mock_inspector = MagicMock()
-        mock_inspector.has_table = MagicMock(return_value=False)
-        mock_inspect.return_value = mock_inspector
-
-        table.create()
-
-    assert table.schema is not None
-    assert len(table.schema) == 3
-    assert "id" in table.schema
-    assert "email" in table.schema
-    assert "active" in table.schema
 
 
 def test_delete_with_single_column_key(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:

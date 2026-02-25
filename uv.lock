@@ -526,11 +526,11 @@ requires-dist = [
     { name = "ds-common-logger-py-lib", specifier = ">=0.1.0a5,<1.0.0" },
     { name = "ds-resource-plugin-py-lib", specifier = ">=0.1.0rc1,<1.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.7.0" },
-    { name = "numpy", specifier = ">=2.4.0,<2.5.0" },
+    { name = "numpy", specifier = ">=2.4.0,<3.0.0" },
     { name = "pandas", specifier = ">=2.0.0,<3.0.0" },
     { name = "pandas-stubs", marker = "extra == 'dev'", specifier = ">=2.1.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.6.0" },
-    { name = "pyodbc", specifier = "==5.3.0" },
+    { name = "pyodbc", specifier = ">=5.3.0,<6.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=7.4.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
@@ -544,7 +544,7 @@ requires-dist = [
     { name = "sphinx-autoapi", marker = "extra == 'docs'", specifier = ">=3.0.0" },
     { name = "sphinx-material", marker = "extra == 'dev'", specifier = ">=0.0.35" },
     { name = "sphinx-material", marker = "extra == 'docs'", specifier = ">=0.0.35" },
-    { name = "sqlalchemy", specifier = "==2.0.46" },
+    { name = "sqlalchemy", specifier = ">=2.0.46,<2.1.0" },
     { name = "twine", marker = "extra == 'dev'", specifier = ">=4.0.0" },
 ]
 provides-extras = ["dev", "test", "docs"]

@@ -582,12 +582,14 @@ def test_create_engine_wraps_exceptions_in_connection_error(
     service = make_service(settings)
     exc_instance = exc_type(message)
 
-    with patch(
-        "ds_provider_microsoft_py_lib.linked_service.mssql.create_engine",
-        side_effect=exc_instance,
+    with (
+        patch(
+            "ds_provider_microsoft_py_lib.linked_service.mssql.create_engine",
+            side_effect=exc_instance,
+        ),
+        pytest.raises(ConnectionError) as exc_info,
     ):
-        with pytest.raises(ConnectionError) as exc_info:
-            service._create_engine()
+        service._create_engine()
 
     error = exc_info.value
     assert "Failed to create database engine" in str(error)
@@ -596,6 +598,8 @@ def test_create_engine_wraps_exceptions_in_connection_error(
         assert error.details["server"] == "localhost"
         assert error.details["port"] == 1433
         assert error.details["database"] == "testdb"
+
+
 def test_connect_handles_unexpected_exception_during_connection_test(
     settings: MsSqlLinkedServiceSettings,
 ) -> None:

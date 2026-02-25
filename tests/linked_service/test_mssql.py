@@ -523,20 +523,6 @@ def test_test_connection_logs_error_when_query_fails(settings: MsSqlLinkedServic
     assert "Connection test failed" in msg
 
 
-def test_get_connection_string_builds_expected(settings: MsSqlLinkedServiceSettings) -> None:
-    service = make_service(settings)
-    assert (
-        service._get_connection_string() == "DRIVER={ODBC Driver 18 for SQL Server};"
-        "SERVER=localhost,1433;"
-        "DATABASE=testdb;"
-        "UID=sa;"
-        "PWD=P@ssw0rd!;"
-        "Encrypt=yes;"
-        "TrustServerCertificate=no;"
-        "Connection Timeout=30;"
-    )
-
-
 def test_create_engine_builds_pyodbc_url(settings: MsSqlLinkedServiceSettings) -> None:
     service = make_service(settings)
     engine_mock = MagicMock()

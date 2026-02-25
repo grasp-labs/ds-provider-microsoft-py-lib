@@ -12,10 +12,10 @@ Example:
 ...    settings=MsSqlTableDatasetSettings(
 ...        table="your_table_name",
 ...        schema="your_schema_name",
-...        delete=DeleteSettings(delete_table=False)
 ...    )
 ... )
 >>> dataset.read()
+"""
 """
 
 import re

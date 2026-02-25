@@ -135,7 +135,7 @@ uv run pytest tests/test_example.py -v
 
 ## Requirements
 
-- Python 3.9+
+- Python 3.11+
 - [uv](https://github.com/astral-sh/uv) package manager
 - Make (for development commands)
 

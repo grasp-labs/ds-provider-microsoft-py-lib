@@ -6,7 +6,14 @@ build-backend = "setuptools.build_meta"
 name = "ds-provider-microsoft-py-lib"
 version = "0.1.0-alpha.1"
 description = "A Python package from the DS library collection"
-dependencies = []
+dependencies = [
+    "ds-resource-plugin-py-lib>=0.1.0rc1,<1.0.0",
+    "ds-common-logger-py-lib>=0.1.0-alpha.5,<1.0.0",
+    "pyodbc>=5.3.0,<6.0.0",
+    "sqlalchemy>=2.0.46,<2.1.0",
+    "pandas>=2.0.0,<3.0.0",
+    "numpy>=2.4.0,<3.0.0",
+]
 requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE-APACHE"]
@@ -35,11 +42,15 @@ Repository = "https://github.com/grasp-labs/ds-provider-microsoft-py-lib/"
 Issues = "https://github.com/grasp-labs/ds-provider-microsoft-py-lib/issues/"
 Changelog = "https://github.com/grasp-labs/ds-provider-microsoft-py-lib/releases"
 
+[project.entry-points."ds.providers"]
+microsoft = "ds_provider_microsoft_py_lib"
+
 [project.optional-dependencies]
 dev = [
     "bandit>=1.9.3",
     "ruff>=0.1.8",
     "mypy>=1.7.0",
+    "pandas-stubs>=2.1.0",
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
     "pytest-xdist>=3.3.0",
@@ -49,7 +60,6 @@ dev = [
     "sphinx>=7.1.0",
     "sphinx-autoapi>=3.0.0",
     "sphinx-material>=0.0.35",
-    "bandit>=1.7.0",
 ]
 test = [
     "pytest>=7.4.0",
@@ -66,7 +76,7 @@ docs = [
 include-package-data = true
 
 [tool.setuptools.package-data]
-ds_provider_microsoft_py_lib = ["py.typed"]
+ds_provider_microsoft_py_lib = ["resource.yaml", "py.typed"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

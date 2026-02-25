@@ -6,9 +6,9 @@ Constants for Microsoft provider.
 
 Example:
     >>> ResourceType.MICROSOFT_SQL_LINKED_SERVICE
-    'DS.RESOURCE.LINKED_SERVICE.MICROSOFT_SQL'
+    'ds.resource.linked_service.microsoft_sql'
     >>> ResourceType.MICROSOFT_SQL_DATASET
-    'DS.RESOURCE.DATASET.MICROSOFT_SQL'
+    'ds.resource.dataset.microsoft_sql'
 """
 
 from enum import StrEnum

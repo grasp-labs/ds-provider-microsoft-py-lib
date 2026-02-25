@@ -203,22 +203,24 @@ class MsSqlTable(
 
         create_props = self.settings.create or CreateSettings()
 
-        try:
-            connection = self.linked_service.connection
-        except ConnectionError as exc:
+        if self.linked_service.connection is None:
+            raise ConnectionError(message="Connection pool is not initialized.")
+
+        if self.input is None or self.input.empty:
             raise CreateError(
-                message=f"Connection not established: {exc.message}",
-                status_code=500,
+                message="Input is empty or None.",
+                status_code=400,
                 details={
                     "table": self.settings.table,
                     "schema": self.settings.schema,
+                    "settings": self.settings.create,
                 },
-            ) from exc
+            )
 
         try:
             self.input.to_sql(
                 name=self.settings.table,
-                con=connection,
+                con=self.linked_service.connection,
                 schema=self.settings.schema,
                 if_exists=create_props.mode,
                 index=create_props.index,
@@ -254,17 +256,8 @@ class MsSqlTable(
             ConnectionError: If the connection is not established.
             ReadError: If the read operation fails.
         """
-        try:
-            connection = self.linked_service.connection
-        except ConnectionError as exc:
-            raise ReadError(
-                message=f"Connection not established: {exc.message}",
-                status_code=500,
-                details={
-                    "table": self.settings.table,
-                    "schema": self.settings.schema,
-                },
-            ) from exc
+        if self.linked_service.connection is None:
+            raise ConnectionError(message="Connection pool is not initialized.")
 
         try:
             table = self._get_table()
@@ -291,7 +284,7 @@ class MsSqlTable(
         try:
             chunks = pd.read_sql(
                 stmt,
-                con=connection,
+                con=self.linked_service.connection,
                 chunksize=100_000,
                 dtype_backend="pyarrow",
             )
@@ -324,24 +317,13 @@ class MsSqlTable(
             ConnectionError: If the connection is not established.
             PurgeError: If the purge operation fails.
         """
-        try:
-            connection = self.linked_service.connection
-        except ConnectionError as exc:
-            raise PurgeError(
-                message=f"Connection not established: {exc.message}",
-                status_code=500,
-                details={
-                    "table": self.settings.table,
-                    "schema": self.settings.schema,
-                },
-            ) from exc
 
         try:
             # DROP TABLE IF EXISTS ensures idempotency
             query = f"DROP TABLE IF EXISTS {quoted_name(self.settings.table, quote=True)};"
             logger.debug(f"Dropping table: {self.settings.schema}.{self.settings.table}")
 
-            with connection.connect() as conn:
+            with self.linked_service.connection.connect() as conn:
                 conn.execute(text(query))
                 conn.commit()
 
@@ -378,18 +360,6 @@ class MsSqlTable(
             return
 
         try:
-            connection = self.linked_service.connection
-        except ConnectionError as exc:
-            raise DeleteError(
-                message=f"Connection not established: {exc.message}",
-                status_code=500,
-                details={
-                    "table": self.settings.table,
-                    "schema": self.settings.schema,
-                },
-            ) from exc
-
-        try:
             # Use all columns present in the input row as match criteria
             key_columns = list(self.input.columns)
 
@@ -406,7 +376,7 @@ class MsSqlTable(
             records = self.input.to_dict(orient="records")
             payloads = [{param_map[col]: row[col] for col in key_columns} for row in records]
 
-            with connection.begin() as conn:
+            with self.linked_service.connection.begin() as conn:
                 conn.execute(delete_sql, payloads)
 
             # Per contract: Populate output with the affected rows (copy of input)
@@ -485,17 +455,7 @@ class MsSqlTable(
             ListError: If the list operation fails.
         """
         try:
-            connection = self.linked_service.connection
-        except ConnectionError as exc:
-            logger.error(f"Connection not established: {exc}", exc_info=True)
-            raise ListError(
-                message=f"Failed to list tables: {exc.message}",
-                status_code=500,
-                details={"schema": self.settings.schema},
-            ) from exc
-
-        try:
-            inspector = inspect(connection)
+            inspector = inspect(self.linked_service.connection)
 
             # Get all tables in the schema, sorted alphabetically
             table_names = sorted(inspector.get_table_names(schema=self.settings.schema))
@@ -719,11 +679,7 @@ class MsSqlTable(
         """
         if re.search(r"[;\"'\[\]]", name):
             raise ValueError(f"Unsafe identifier: {name!r}")
-        try:
-            connection = self.linked_service.connection
-        except ConnectionError as exc:
-            raise ConnectionError(message="Connection not established.") from exc
-        preparer = connection.dialect.identifier_preparer
+        preparer = self.linked_service.connection.dialect.identifier_preparer
         return preparer.quote(name)
 
     def get_details(self) -> dict[str, Any]:

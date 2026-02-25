@@ -21,6 +21,7 @@ from ds_resource_plugin_py_lib.common.resource.linked_service.errors import (
     AuthenticationError,
     ConnectionError,
 )
+from sqlalchemy.exc import ArgumentError
 
 from ds_provider_microsoft_py_lib.enums import ResourceType
 from ds_provider_microsoft_py_lib.linked_service.mssql import MsSqlLinkedService, MsSqlLinkedServiceSettings
@@ -474,6 +475,48 @@ class TestExceptionChaining:
 
             # Check that original exception is chained
             assert exc_info.value.__cause__ is original_error
+
+
+# Tests specifically for uncovered exception handling paths
+
+
+def test_create_engine_logs_and_wraps_sqlalchemy_argument_error(settings: MsSqlLinkedServiceSettings) -> None:
+    """Test that _create_engine properly logs and wraps SQLAlchemy ArgumentError."""
+    service = make_service(settings)
+    arg_error = ArgumentError("Invalid connection string")
+
+    with (
+        patch("ds_provider_microsoft_py_lib.linked_service.mssql.create_engine", side_effect=arg_error),
+        pytest.raises(ConnectionError) as exc_info,
+    ):
+        service._create_engine()
+
+    error = exc_info.value
+    assert "Failed to create database engine" in str(error)
+    assert error.details["server"] == "localhost"
+    assert error.details["port"] == 1433
+    assert error.details["database"] == "testdb"
+
+
+def test_test_connection_logs_error_when_query_fails(settings: MsSqlLinkedServiceSettings) -> None:
+    """Test that test_connection() properly logs and returns False when query execution fails."""
+    service = make_service(settings)
+    engine_mock = MagicMock()
+    conn_mock = MagicMock()
+    engine_mock.connect = MagicMock(return_value=conn_mock)
+    conn_mock.__enter__ = MagicMock(return_value=conn_mock)
+    conn_mock.__exit__ = MagicMock(return_value=None)
+
+    # Simulate an exception during query execution (lines 309-310)
+    query_error = RuntimeError("Query execution failed")
+    conn_mock.execute.side_effect = query_error
+    service._connection = engine_mock
+
+    ok, msg = service.test_connection()
+
+    assert ok is False
+    assert "Query execution failed" in msg
+    assert "Connection test failed" in msg
 
 
 def test_check_settings_is_set_rejects_invalid_type(settings: MsSqlLinkedServiceSettings) -> None:

@@ -148,7 +148,7 @@ class CreateSettings(Serializable):
 @dataclass(kw_only=True)
 class MsSqlTableDatasetSettings(DatasetSettings):
     table: str
-    """Schema for dataset operations."""
+    """Table name for dataset operations."""
 
     schema: str
     """Schema for dataset operations."""

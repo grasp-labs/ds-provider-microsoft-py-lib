@@ -44,7 +44,6 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     Column,
-    DateTime,
     Float,
     Integer,
     MetaData,
@@ -58,6 +57,7 @@ from sqlalchemy import (
     select,
     text,
 )
+from sqlalchemy.dialects.mssql import DATETIME2
 from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.inspection import inspect
 from sqlalchemy.sql import Select
@@ -576,7 +576,7 @@ class MsSqlTable(
             elif pd.api.types.is_bool_dtype(dtype):
                 dtype_map[col_name_str] = Boolean()
             elif pd.api.types.is_datetime64_any_dtype(dtype):
-                dtype_map[col_name_str] = DateTime()
+                dtype_map[col_name_str] = DATETIME2()  # type: ignore
             elif pd.api.types.is_string_dtype(dtype) or isinstance(dtype, pd.CategoricalDtype):
                 dtype_map[col_name_str] = String(length=255)
             else:

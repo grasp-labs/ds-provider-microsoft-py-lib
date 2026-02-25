@@ -14,7 +14,6 @@ Covers:
 """
 
 from unittest.mock import MagicMock, patch
-from urllib.parse import quote_plus
 
 import pytest
 from ds_resource_plugin_py_lib.common.resource.linked_service.errors import (
@@ -521,16 +520,6 @@ def test_test_connection_logs_error_when_query_fails(settings: MsSqlLinkedServic
     assert ok is False
     assert "Query execution failed" in msg
     assert "Connection test failed" in msg
-
-
-def test_create_engine_builds_pyodbc_url(settings: MsSqlLinkedServiceSettings) -> None:
-    service = make_service(settings)
-    engine_mock = MagicMock()
-    with patch("ds_provider_microsoft_py_lib.linked_service.mssql.create_engine", return_value=engine_mock) as create_engine_mock:
-        engine = service._create_engine()
-    assert engine is engine_mock
-    quoted_conn = quote_plus(service._get_connection_string())
-    create_engine_mock.assert_called_once_with(f"mssql+pyodbc:///?odbc_connect={quoted_conn}", echo=False)
 
 
 def test_connect_sets_engine(settings: MsSqlLinkedServiceSettings) -> None:

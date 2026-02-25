@@ -706,3 +706,21 @@ def test_create_engine_logs_argument_error(settings: MsSqlLinkedServiceSettings)
         pytest.raises(ConnectionError),
     ):
         service._create_engine()
+
+
+# Line 271 - connect() re-raises ConnectionError from _create_engine
+def test_connect_reraises_connection_error_from_create_engine(settings: MsSqlLinkedServiceSettings) -> None:
+    """connect() must re-raise ConnectionError raised by _create_engine() without wrapping."""
+    service = make_service(settings)
+    original_error = ConnectionError(
+        message="Failed to create database engine: bad config",
+        details={"server": "localhost", "port": 1433, "database": "testdb"},
+    )
+
+    with (
+        patch.object(service, "_create_engine", side_effect=original_error),
+        pytest.raises(ConnectionError) as exc_info,
+    ):
+        service.connect()
+
+    assert exc_info.value is original_error

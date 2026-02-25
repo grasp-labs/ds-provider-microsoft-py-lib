@@ -4,6 +4,7 @@ Unit tests for MsSqlTable dataset implementation.
 
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pandas as pd
 import pytest
 from ds_resource_plugin_py_lib.common.resource.dataset.errors import (
@@ -13,16 +14,18 @@ from ds_resource_plugin_py_lib.common.resource.dataset.errors import (
     PurgeError,
     ReadError,
 )
-from ds_resource_plugin_py_lib.common.resource.errors import NotSupportedError
+from ds_resource_plugin_py_lib.common.resource.errors import NotSupportedError, ValidationError
 from sqlalchemy import Column, Float, Integer, MetaData, String
 from sqlalchemy import Table as SQLTable
 from sqlalchemy import select as sql_select
 from sqlalchemy.exc import NoSuchTableError
 
 from ds_provider_microsoft_py_lib.dataset.mssql import (
+    CreateSettings,
     MsSqlTable,
     MsSqlTableDatasetSettings,
     ReadSettings,
+    quote_identifier,
 )
 from ds_provider_microsoft_py_lib.enums import ResourceType
 
@@ -1523,3 +1526,318 @@ def test_build_select_columns_with_single_column_repeated(settings: MsSqlTableDa
     # Should work - includes the column (may appear twice in SELECT)
     assert result is not None
     assert "name" in str(result)
+
+
+# ── Coverage gap tests ──────────────────────────────────────────────────
+
+
+# Line 82 - module-level quote_identifier function
+def test_quote_identifier_module_function() -> None:
+    """Test the module-level quote_identifier function."""
+    assert quote_identifier("my_col") == '"my_col"'
+
+
+def test_quote_identifier_module_function_escapes_double_quotes() -> None:
+    """Test that quote_identifier escapes embedded double quotes."""
+    assert quote_identifier('col"name') == '"col""name"'
+
+
+# Lines 244-245 - create() wraps ValidationError into CreateError
+def test_create_wraps_validation_error_into_create_error(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """When _build_table_from_input raises ValidationError, create() must wrap it as CreateError."""
+    settings.create = CreateSettings(primary_key=True, primary_key_columns=["missing_col"])
+    table = make_table(settings, linked_service)
+    df = pd.DataFrame({"id": [1, 2]})
+    table.input = df
+
+    mock_conn = MagicMock()
+    mock_begin = MagicMock()
+    mock_begin.__enter__ = MagicMock(return_value=mock_conn)
+    mock_begin.__exit__ = MagicMock(return_value=None)
+    linked_service.connection.begin = MagicMock(return_value=mock_begin)
+
+    with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect") as mock_inspect:
+        mock_inspector = MagicMock()
+        mock_inspector.has_table = MagicMock(return_value=False)
+        mock_inspect.return_value = mock_inspector
+
+        with pytest.raises(CreateError) as exc_info:
+            table.create()
+
+        assert isinstance(exc_info.value.__cause__, ValidationError)
+
+
+# Lines 285, 289-291 - read with limit applied + successful read path
+def test_read_with_limit_applies_limit(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """read() must apply limit when set in read settings."""
+    settings.read = ReadSettings(limit=10)
+    table = make_table(settings, linked_service)
+
+    mock_sa_table = MagicMock()
+    mock_stmt = MagicMock()
+    mock_stmt.limit = MagicMock(return_value=mock_stmt)
+
+    mock_conn = MagicMock()
+    mock_conn_ctx = MagicMock()
+    mock_conn_ctx.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn_ctx.__exit__ = MagicMock(return_value=None)
+    linked_service.connection.connect = MagicMock(return_value=mock_conn_ctx)
+    mock_conn.execute.return_value.mappings.return_value.all.return_value = [
+        {"id": 1, "name": "a"},
+    ]
+
+    with (
+        patch.object(table, "_get_table", return_value=mock_sa_table),
+        patch.object(table, "_build_select_columns", return_value=mock_stmt),
+        patch.object(table, "_build_filters", return_value=mock_stmt),
+        patch.object(table, "_build_order_by", return_value=mock_stmt),
+    ):
+        table.read()
+
+    mock_stmt.limit.assert_called_once_with(10)
+    assert table.output is not None
+    assert len(table.output) == 1
+
+
+# Lines 308-310 - read() wraps ValidationError into ReadError
+def test_read_wraps_validation_error_into_read_error(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """When _validate_read_settings raises ValidationError, read() must wrap it as ReadError."""
+    settings.read = ReadSettings(limit=-1)
+    table = make_table(settings, linked_service)
+
+    with pytest.raises(ReadError) as exc_info:
+        table.read()
+
+    assert isinstance(exc_info.value.__cause__, ValidationError)
+    assert exc_info.value.status_code == 400
+
+
+# Line 405 - delete without schema (else branch)
+def test_delete_without_schema(linked_service: MagicMock) -> None:
+    """delete() must handle settings without a schema attribute."""
+    settings = MsSqlTableDatasetSettings(table="mytable", schema="myschema")
+    table = make_table(settings, linked_service)
+    df = pd.DataFrame({"id": [1]})
+    table.input = df
+
+    # Remove the schema attribute to trigger the else branch
+    table.settings = MagicMock()
+    table.settings.table = "mytable"
+    table.settings.schema = None
+    # getattr(settings, "schema", None) returns None → else branch
+    type(table.settings).schema = None  # type: ignore[assignment]
+
+    mock_conn = MagicMock()
+    mock_begin = MagicMock()
+    mock_begin.__enter__ = MagicMock(return_value=mock_conn)
+    mock_begin.__exit__ = MagicMock(return_value=None)
+    linked_service.connection.begin = MagicMock(return_value=mock_begin)
+
+    table.delete()
+    assert table.output is not None
+
+
+# Lines 476-477 - close() suppresses linked_service.close() exception
+def test_close_suppresses_linked_service_exception(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """close() must suppress exceptions from linked_service.close()."""
+    table = make_table(settings, linked_service)
+    linked_service.close.side_effect = RuntimeError("Boom")
+
+    # Should not raise
+    table.close()
+
+
+# Line 525 - list() re-raises ListError
+def test_list_reraises_list_error(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """list() must re-raise ListError without wrapping."""
+    table = make_table(settings, linked_service)
+    original_error = ListError(message="Already a ListError", status_code=500, details={})
+
+    with (
+        patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", side_effect=original_error),
+        pytest.raises(ListError) as exc_info,
+    ):
+        table.list()
+
+    assert exc_info.value is original_error
+
+
+# Line 609 - fallback dtype mapping (complex/timedelta type)
+def test_pandas_dtype_to_sqlalchemy_falls_back_for_unknown_dtype(
+    settings: MsSqlTableDatasetSettings, linked_service: MagicMock
+) -> None:
+    """Unknown dtype must fall back to String(255)."""
+    table = make_table(settings, linked_service)
+
+    dtypes = pd.Series({"complex_col": np.dtype("complex128")})
+    result = table._pandas_dtype_to_sqlalchemy(dtypes)
+
+    assert "complex_col" in result
+    assert isinstance(result["complex_col"], String)
+
+
+# Lines 624-626 - _validate_column raises ValueError for missing column
+def test_validate_column_raises_value_error_for_missing_column(
+    settings: MsSqlTableDatasetSettings, linked_service: MagicMock
+) -> None:
+    """_validate_column must raise ValueError when column is not in table."""
+    table = make_table(settings, linked_service)
+    metadata = MetaData()
+    test_table = SQLTable("test", metadata, Column("id", Integer))
+
+    with pytest.raises(ValueError, match="Column 'nonexistent' not found"):
+        table._validate_column(test_table, "nonexistent")
+
+
+# Line 647 - _validate_columns raises ValidationError for missing columns
+def test_validate_columns_raises_validation_error_for_missing_columns(
+    settings: MsSqlTableDatasetSettings, linked_service: MagicMock
+) -> None:
+    """_validate_columns must raise ValidationError when columns are missing."""
+    table = make_table(settings, linked_service)
+    metadata = MetaData()
+    test_table = SQLTable("test", metadata, Column("id", Integer))
+
+    with pytest.raises(ValidationError) as exc_info:
+        table._validate_columns(test_table, ["id", "missing_col"])
+
+    assert "missing_col" in str(exc_info.value.details["missing_columns"])
+
+
+# Line 783 - get_details includes filters
+def test_get_details_includes_filters(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """get_details must include filters when read settings have filters."""
+    settings.read = ReadSettings(filters={"status": "active"})
+    table = make_table(settings, linked_service)
+
+    details = table.get_details()
+
+    assert "filters" in details
+    assert details["filters"] == {"status": "active"}
+
+
+# Line 787 - get_details includes delete_table
+def test_get_details_includes_delete_table(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """get_details must include delete_table when delete settings are present."""
+    table = make_table(settings, linked_service)
+    # Simulate a settings object with a delete attribute
+    table.settings = MagicMock()
+    table.settings.table = "mytable"
+    table.settings.schema = "myschema"
+    table.settings.read = ReadSettings()
+    delete_mock = MagicMock()
+    delete_mock.delete_table = True
+    table.settings.delete = delete_mock
+
+    details = table.get_details()
+
+    assert "delete_table" in details
+    assert details["delete_table"] == "True"
+
+
+# Line 801 - _copy_into_table with empty content returns early
+def test_copy_into_table_empty_content_returns(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """_copy_into_table must return early for empty content."""
+    table = make_table(settings, linked_service)
+    mock_conn = MagicMock()
+    mock_sa_table = MagicMock()
+
+    table._copy_into_table(mock_conn, mock_sa_table, pd.DataFrame())
+
+    mock_conn.execute.assert_not_called()
+
+
+# Lines 812-815, 826-829 - _copy_into_table with identity columns
+@patch("ds_provider_microsoft_py_lib.dataset.mssql.insert")
+def test_copy_into_table_with_identity_columns(
+    mock_insert: MagicMock,
+    settings: MsSqlTableDatasetSettings,
+    linked_service: MagicMock,
+) -> None:
+    """_copy_into_table must enable/disable IDENTITY_INSERT when identity columns are in input."""
+    table = make_table(settings, linked_service)
+    mock_conn = MagicMock()
+
+    # Create a mock table with identity column
+    identity_col = MagicMock()
+    identity_col.name = "id"
+    identity_col.identity = True
+    mock_sa_table = MagicMock()
+    mock_sa_table.columns = [identity_col]
+
+    content = pd.DataFrame({"id": [1, 2], "name": ["a", "b"]})
+
+    table._copy_into_table(mock_conn, mock_sa_table, content)
+
+    # Verify IDENTITY_INSERT ON and OFF were called (at least 3 execute calls:
+    # SET IDENTITY_INSERT ON, insert, SET IDENTITY_INSERT OFF)
+    assert mock_conn.execute.call_count >= 3
+
+
+# Lines 852-853 - _resolve_create_primary_key_columns: PK enabled but columns missing
+def test_resolve_create_pk_columns_raises_when_pk_columns_missing(
+    settings: MsSqlTableDatasetSettings, linked_service: MagicMock
+) -> None:
+    """Must raise ValidationError when primary_key=True but primary_key_columns is empty."""
+    settings.create = CreateSettings(primary_key=True, primary_key_columns=None)
+    table = make_table(settings, linked_service)
+    df = pd.DataFrame({"id": [1]})
+
+    with pytest.raises(ValidationError, match="Missing primary key columns"):
+        table._resolve_create_primary_key_columns(df)
+
+
+# Lines 865-866 - _resolve_create_primary_key_columns: PK columns not in input
+def test_resolve_create_pk_columns_raises_when_pk_columns_not_in_input(
+    settings: MsSqlTableDatasetSettings, linked_service: MagicMock
+) -> None:
+    """Must raise ValidationError when primary_key_columns don't exist in input DataFrame."""
+    settings.create = CreateSettings(primary_key=True, primary_key_columns=["nonexistent"])
+    table = make_table(settings, linked_service)
+    df = pd.DataFrame({"id": [1]})
+
+    with pytest.raises(ValidationError, match="Primary key columns do not exist"):
+        table._resolve_create_primary_key_columns(df)
+
+
+# Line 929 - _output_from_empty_input with None input
+def test_output_from_empty_input_with_none(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """_output_from_empty_input must return empty DataFrame when input is None."""
+    table = make_table(settings, linked_service)
+    table.input = None  # type: ignore
+
+    result = table._output_from_empty_input()
+
+    assert isinstance(result, pd.DataFrame)
+    assert result.empty
+
+
+# Line 945 - _validate_read_settings: limit <= 0
+def test_validate_read_settings_rejects_zero_limit(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """_validate_read_settings must raise ValidationError when limit is <= 0."""
+    settings.read = ReadSettings(limit=0)
+    table = make_table(settings, linked_service)
+
+    with pytest.raises(ValidationError, match="Read limit must be greater than 0"):
+        table._validate_read_settings()
+
+
+def test_validate_read_settings_rejects_negative_limit(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """_validate_read_settings must raise ValidationError when limit is negative."""
+    settings.read = ReadSettings(limit=-5)
+    table = make_table(settings, linked_service)
+
+    with pytest.raises(ValidationError, match="Read limit must be greater than 0"):
+        table._validate_read_settings()
+
+
+# Lines 958-973 - _validate_read_settings: invalid order_by direction
+def test_validate_read_settings_rejects_invalid_order_direction(
+    settings: MsSqlTableDatasetSettings, linked_service: MagicMock
+) -> None:
+    """_validate_read_settings must raise ValidationError for invalid order direction."""
+    settings.read = ReadSettings(order_by=["name", ("id", "invalid_direction")])
+    table = make_table(settings, linked_service)
+
+    with pytest.raises(ValidationError, match="Invalid order_by direction"):
+        table._validate_read_settings()

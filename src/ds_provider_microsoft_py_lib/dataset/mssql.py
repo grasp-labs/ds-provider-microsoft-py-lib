@@ -224,7 +224,6 @@ class MsSqlTable(
                     table.create(bind=conn)
                 self._copy_into_table(conn, table, create_input)
             self.output = self.input.copy()
-            self._set_schema(self.output)
             logger.debug("Create completed successfully. Rows written=%d", len(self.output))
         except ValidationError as exc:
             logger.error("Create validation failed: %s", exc.message)
@@ -400,7 +399,6 @@ class MsSqlTable(
 
             # Per contract: Populate output with the affected rows (copy of input)
             self.output = self.input.copy()
-            self._set_schema(self.output)
             logger.info(f"Successfully deleted {len(payloads)} rows from {self.settings.schema}.{self.settings.table}")
         except Exception as exc:
             logger.error(f"Failed to delete rows from table: {exc}", exc_info=True)
@@ -504,7 +502,6 @@ class MsSqlTable(
 
             # Per contract: self.output must be populated with discovered resources
             self.output = pd.DataFrame(tables_info)
-            self._set_schema(self.output)
             logger.info(f"Successfully listed {len(self.output)} tables in schema: {self.settings.schema}")
         except ListError:
             # Re-raise our own exception type
@@ -533,16 +530,6 @@ class MsSqlTable(
             message="Upsert operation is not supported for SQL Server datasets.",
             details={"table": self.settings.table, "schema": self.settings.schema},
         )
-
-    def _set_schema(self, content: pd.DataFrame) -> None:
-        """
-        Set the schema from the content.
-
-        Args:
-            content: The content to set the schema from.
-        """
-        converted = content.convert_dtypes(dtype_backend="pyarrow")
-        self.schema = {str(col): str(dtype) for col, dtype in converted.dtypes.to_dict().items()}
 
     def _get_table(self) -> Table:
         """

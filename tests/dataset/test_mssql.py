@@ -215,16 +215,6 @@ def test_delete_wraps_unsafe_identifier_error(settings: MsSqlTableDatasetSetting
         table.delete()
 
 
-# Test schema handling
-def test_set_schema_creates_schema_dict(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
-    table = make_table(settings, linked_service)
-    df = pd.DataFrame({"id": [1, 2], "name": ["a", "b"]})
-    table._set_schema(df)
-    assert table.schema is not None
-    assert "id" in table.schema
-    assert "name" in table.schema
-
-
 # Test create error on connection failure
 def test_create_raises_create_error_on_connection_failure(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     table = make_table(settings, linked_service)
@@ -1018,28 +1008,6 @@ def test_quote_identifier_accepts_valid_names(settings: MsSqlTableDatasetSetting
         result = table._quote_identifier(name)
         assert result is not None
         assert "[" in result and "]" in result
-
-
-def test_set_schema_handles_various_dtypes(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
-    """Test that _set_schema handles various pandas dtypes."""
-    table = make_table(settings, linked_service)
-    df = pd.DataFrame(
-        {
-            "int_col": [1, 2, 3],
-            "float_col": [1.0, 2.0, 3.0],
-            "str_col": ["a", "b", "c"],
-            "bool_col": [True, False, True],
-        }
-    )
-
-    table._set_schema(df)
-
-    assert table.schema is not None
-    assert len(table.schema) == 4
-    assert all(isinstance(v, str) for v in table.schema.values())
-
-
-# Tests specifically for _build_filters method (lines 625-633)
 
 
 def test_build_filters_with_single_filter(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:

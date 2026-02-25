@@ -9,10 +9,10 @@ description = "A Python package from the DS library collection"
 dependencies = [
     "ds-resource-plugin-py-lib>=0.1.0rc1,<1.0.0",
     "ds-common-logger-py-lib>=0.1.0-alpha.5,<1.0.0",
-    "pyodbc==5.3.0",
-    "sqlalchemy==2.0.46",
+    "pyodbc>=5.3.0,<6.0.0",
+    "sqlalchemy>=2.0.46,<2.1.0",
     "pandas>=2.0.0,<3.0.0",
-    "numpy>=2.4.0,<2.5.0",
+    "numpy>=2.4.0,<3.0.0",
 ]
 requires-python = ">=3.11"
 license = "Apache-2.0"

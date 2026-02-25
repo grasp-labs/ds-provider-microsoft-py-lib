@@ -24,8 +24,12 @@ import uuid
 import pandas as pd
 from ds_resource_plugin_py_lib.common.resource.dataset.errors import ReadError
 
-from ds_provider_microsoft_py_lib.dataset.mssql import MsSqlTableDatasetSettings, MsSqlTable, CreateSettings, \
-    ReadSettings
+from ds_provider_microsoft_py_lib.dataset.mssql import (
+    MsSqlTableDatasetSettings,
+    MsSqlTable,
+    CreateSettings,
+    ReadSettings,
+)
 from ds_provider_microsoft_py_lib.linked_service.mssql import MsSqlLinkedService, MsSqlLinkedServiceSettings
 
 linked_service = MsSqlLinkedService(

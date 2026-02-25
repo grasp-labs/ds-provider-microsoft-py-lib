@@ -289,7 +289,7 @@ class MsSqlLinkedService(LinkedService[MsSqlLinkedServiceSettingsType], Generic[
         (False, "error message"). Exceptions are reserved for unexpected internal errors.
 
         Returns:
-            tuple[bool, str] -- On success: (True, "Connection successfully tested").
+            tuple[bool, str] -- On success: (True, "").
             On failure: (False, "reason").
 
         Rules:
@@ -299,23 +299,23 @@ class MsSqlLinkedService(LinkedService[MsSqlLinkedServiceSettingsType], Generic[
             - Idempotent: Yes.
         """
         try:
-            # If not yet connected, attempt to connect first
-            if self._connection is None:
-                logger.debug("Connection not established, attempting to connect for test...")
+            if self._connection is not None:
+                # Use the existing connection for the health check
+                with self._connection.connect() as conn:
+                    result = conn.execute(text("SELECT 1"))
+                    result.fetchone()
+            else:
+                # Create a temporary engine to test without mutating state
+                engine = self._create_engine()
                 try:
-                    self.connect()
-                except (ConnectionError, AuthenticationError) as exc:
-                    return False, f"Connection failed: {exc.message}"
-                except Exception as exc:
-                    return False, f"Unexpected error during connection: {exc!s}"
-
-            # Test the existing connection with a simple query
-            with self.connection.connect() as conn:
-                result = conn.execute(text("SELECT 1"))
-                result.fetchone()
+                    with engine.connect() as conn:
+                        result = conn.execute(text("SELECT 1"))
+                        result.fetchone()
+                finally:
+                    engine.dispose()
 
             logger.debug("Connection test successful.")
-            return True, "Connection successfully tested"
+            return True, ""
         except Exception as exc:
             logger.error(f"Failed to test connection: {exc}", exc_info=True)
             return False, f"Connection test failed: {exc!s}"

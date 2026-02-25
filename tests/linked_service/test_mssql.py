@@ -210,7 +210,7 @@ class TestTestConnectionMethod:
         assert isinstance(result[1], str)
 
     def test_test_connection_success_returns_true(self, settings: MsSqlLinkedServiceSettings) -> None:
-        """test_connection() must return (True, msg) on success."""
+        """test_connection() must return (True, "") on success."""
         service = make_service(settings)
         engine_mock = MagicMock()
         conn_mock = MagicMock()
@@ -222,7 +222,7 @@ class TestTestConnectionMethod:
         ok, msg = service.test_connection()
 
         assert ok is True
-        assert "Connection successfully tested" in msg
+        assert msg == ""
 
     def test_test_connection_never_raises(self, settings: MsSqlLinkedServiceSettings) -> None:
         """test_connection() must never raise, even on failure."""
@@ -243,7 +243,7 @@ class TestTestConnectionMethod:
             pytest.fail(f"test_connection() raised exception: {e}")
 
     def test_test_connection_auto_connects_if_needed(self, settings: MsSqlLinkedServiceSettings) -> None:
-        """test_connection() should auto-connect if not yet connected."""
+        """test_connection() should use a temporary engine if not yet connected, without mutating state."""
         service = make_service(settings)
         service._connection = None
 
@@ -257,20 +257,24 @@ class TestTestConnectionMethod:
             ok, _msg = service.test_connection()
 
         assert ok is True
+        # Must not mutate internal state
+        assert service._connection is None
+        # Temporary engine must be disposed
+        engine_mock.dispose.assert_called_once()
 
     def test_test_connection_returns_false_on_connection_error(self, settings: MsSqlLinkedServiceSettings) -> None:
         """test_connection() must return (False, msg) when connection fails."""
         service = make_service(settings)
         service._connection = None
 
-        with patch.object(service, "connect", side_effect=ConnectionError(message="Cannot connect")):
+        with patch.object(service, "_create_engine", side_effect=ConnectionError(message="Cannot connect")):
             ok, msg = service.test_connection()
 
         assert ok is False
-        assert "Connection failed" in msg
+        assert "Cannot connect" in msg
 
     # Test connected service can test connection
-    def test_test_connection_on_already_connected_service(settings: MsSqlLinkedServiceSettings) -> None:
+    def test_test_connection_on_already_connected_service(self, settings: MsSqlLinkedServiceSettings) -> None:
         service = make_service(settings)
         engine_mock = MagicMock()
         conn_mock = MagicMock()
@@ -285,7 +289,7 @@ class TestTestConnectionMethod:
         ok, msg = service.test_connection()
 
         assert ok is True
-        assert "Connection successfully tested" in msg
+        assert msg == ""
         result_mock.fetchone.assert_called_once()
 
 

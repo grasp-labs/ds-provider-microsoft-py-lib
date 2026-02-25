@@ -383,6 +383,7 @@ class MsSqlTable(
         # Per contract: Empty input is not an error, return immediately
         if self.input is None or self.input.empty:
             logger.debug("Empty input provided to delete(); returning without action.")
+            self.output = self._output_from_empty_input()
             return
 
         try:
@@ -470,7 +471,10 @@ class MsSqlTable(
         Returns:
             None
         """
-        self.linked_service.close()
+        try:
+            self.linked_service.close()
+        except Exception:
+            logger.debug("Exception suppressed during close().", exc_info=True)
 
     def list(self, **_kwargs: Any) -> None:
         """
@@ -489,19 +493,26 @@ class MsSqlTable(
         try:
             inspector = inspect(self.linked_service.connection)
 
-            # Get all tables in the schema, sorted alphabetically
+            # Get all tables and views in the schema
             table_names = sorted(inspector.get_table_names(schema=self.settings.schema))
-            view_names = set(inspector.get_view_names(schema=self.settings.schema))
+            view_names = sorted(inspector.get_view_names(schema=self.settings.schema))
 
-            # Build table info list with metadata
+            # Build resource info list with metadata
             tables_info = []
             for table_name in table_names:
-                table_type = "VIEW" if table_name in view_names else "BASE TABLE"
                 tables_info.append(
                     {
                         "TABLE_SCHEMA": self.settings.schema,
                         "TABLE_NAME": table_name,
-                        "TABLE_TYPE": table_type,
+                        "TABLE_TYPE": "BASE TABLE",
+                    }
+                )
+            for view_name in view_names:
+                tables_info.append(
+                    {
+                        "TABLE_SCHEMA": self.settings.schema,
+                        "TABLE_NAME": view_name,
+                        "TABLE_TYPE": "VIEW",
                     }
                 )
 

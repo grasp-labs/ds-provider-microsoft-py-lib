@@ -64,8 +64,9 @@ def test_delete_empty_input_returns_immediately(settings: MsSqlTableDatasetSetti
     table = make_table(settings, linked_service)
     table.input = pd.DataFrame()  # type: ignore
     table.delete()
-    # delete() doesn't set output for empty input, it just returns
-    assert table.output is None
+    # Per contract: empty input is a no-op but self.output is still populated
+    assert table.output is not None
+    assert table.output.empty
 
 
 # Test error types
@@ -153,8 +154,8 @@ def test_close_is_idempotent(settings: MsSqlTableDatasetSettings, linked_service
 def test_list_populates_output(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     table = make_table(settings, linked_service)
     mock_inspector = MagicMock()
-    mock_inspector.get_table_names = MagicMock(return_value=["table1", "table2"])
-    mock_inspector.get_view_names = MagicMock(return_value=["table2"])
+    mock_inspector.get_table_names = MagicMock(return_value=["table1"])
+    mock_inspector.get_view_names = MagicMock(return_value=["view1"])
     with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector):
         table.list()
     assert table.output is not None
@@ -375,7 +376,7 @@ def test_pandas_dtype_to_sqlalchemy_with_all_types(settings: MsSqlTableDatasetSe
 def test_list_with_tables_and_views(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     table = make_table(settings, linked_service)
     mock_inspector = MagicMock()
-    mock_inspector.get_table_names = MagicMock(return_value=["table1", "table2", "view1"])
+    mock_inspector.get_table_names = MagicMock(return_value=["table1", "table2"])
     mock_inspector.get_view_names = MagicMock(return_value=["view1"])
 
     with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector):
@@ -497,7 +498,7 @@ def test_list_creates_dataframe_with_correct_structure(settings: MsSqlTableDatas
     table = make_table(settings, linked_service)
     mock_inspector = MagicMock()
     mock_inspector.get_table_names = MagicMock(return_value=["tbl1", "tbl2"])
-    mock_inspector.get_view_names = MagicMock(return_value=["tbl2"])
+    mock_inspector.get_view_names = MagicMock(return_value=[])
 
     with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector):
         table.list()
@@ -962,7 +963,7 @@ def test_list_populates_all_required_columns(settings: MsSqlTableDatasetSettings
     table = make_table(settings, linked_service)
     mock_inspector = MagicMock()
     mock_inspector.get_table_names = MagicMock(return_value=["users", "orders"])
-    mock_inspector.get_view_names = MagicMock(return_value=[""])
+    mock_inspector.get_view_names = MagicMock(return_value=[])
 
     with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector):
         table.list()

@@ -25,7 +25,6 @@ from ds_provider_microsoft_py_lib.dataset.mssql import (
     MsSqlTable,
     MsSqlTableDatasetSettings,
     ReadSettings,
-    quote_identifier,
 )
 from ds_provider_microsoft_py_lib.enums import ResourceType
 
@@ -1526,20 +1525,6 @@ def test_build_select_columns_with_single_column_repeated(settings: MsSqlTableDa
     # Should work - includes the column (may appear twice in SELECT)
     assert result is not None
     assert "name" in str(result)
-
-
-# ── Coverage gap tests ──────────────────────────────────────────────────
-
-
-# Line 82 - module-level quote_identifier function
-def test_quote_identifier_module_function() -> None:
-    """Test the module-level quote_identifier function."""
-    assert quote_identifier("my_col") == '"my_col"'
-
-
-def test_quote_identifier_module_function_escapes_double_quotes() -> None:
-    """Test that quote_identifier escapes embedded double quotes."""
-    assert quote_identifier('col"name') == '"col""name"'
 
 
 # Lines 244-245 - create() wraps ValidationError into CreateError

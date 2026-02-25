@@ -69,19 +69,6 @@ from ..linked_service.mssql import MsSqlLinkedService
 logger = Logger.get_logger(__name__, package=True)
 
 
-def quote_identifier(identifier: str) -> str:
-    """
-    Safely quote SQL identifiers for dynamic DDL statements.
-
-    Args:
-        identifier: Raw SQL identifier.
-
-    Returns:
-        str: Properly quoted SQL identifier.
-    """
-    return '"' + identifier.replace('"', '""') + '"'
-
-
 @dataclass(kw_only=True)
 class ReadSettings(Serializable):
     """
@@ -577,7 +564,8 @@ class MsSqlTable(
             autoload_with=self.linked_service.connection,
         )
 
-    def _pandas_dtype_to_sqlalchemy(self, dtypes: pd.Series) -> dict[str, Any]:
+    @staticmethod
+    def _pandas_dtype_to_sqlalchemy(dtypes: pd.Series) -> dict[str, Any]:
         """
         Convert pandas dtypes Series to a dict mapping column names to SQLAlchemy types.
 

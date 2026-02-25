@@ -674,8 +674,14 @@ class MsSqlTable(
         Reject identifiers containing obvious injection primitives like quotes, semicolons,
         or brackets before quoting.
 
+        Args:
+            name: The identifier name to quote.
+
         Returns:
             str: The safely quoted identifier.
+
+        Raises:
+            ValueError: If the identifier contains unsafe characters.
         """
         if re.search(r"[;\"'\[\]]", name):
             raise ValueError(f"Unsafe identifier: {name!r}")
@@ -686,8 +692,16 @@ class MsSqlTable(
         """
         Get details about the dataset.
 
+        Constructs and returns a dictionary containing metadata about the current
+        dataset configuration, including table name, schema name, and optional
+        query filters and delete settings.
+
         Returns:
-            dict[str, Any]
+            dict[str, Any]: A dictionary containing:
+                - table_name (str): The name of the target table
+                - schema_name (str): The schema containing the table
+                - query_filter (Any, optional): Filter criteria if specified
+                - delete_table (str, optional): Delete table setting if specified
         """
         details: dict[str, Any] = {
             "table_name": self.settings.table,

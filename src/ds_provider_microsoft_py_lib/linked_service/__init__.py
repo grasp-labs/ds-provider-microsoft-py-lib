@@ -5,19 +5,19 @@
 Linked service module for Microsoft provider.
 
 Example:
->>>linked_service = MsSqlLinkedService(
-...        settings = MsSqlLinkedServiceSettings(
-...            server="account name",
-...            database="database",
-...            username="username",
-...            password="password",
-...        ),
-...        id=uuid.uuid4(),
-...        name="testmssqlpackage",
-...        version="0.0.1",
-...        description="testmssqlpackage"
-...    )
-    >>> linked_service.connect()
+>>> linked_service = MsSqlLinkedService(
+...     settings=MsSqlLinkedServiceSettings(
+...         server="account name",
+...         database="database",
+...         username="username",
+...         password="password",
+...     ),
+...     id=uuid.uuid4(),
+...     name="testmssqlpackage",
+...     version="0.0.1",
+...     description="testmssqlpackage"
+... )
+>>> linked_service.connect()
 """
 
 from .mssql import MsSqlLinkedService, MsSqlLinkedServiceSettings

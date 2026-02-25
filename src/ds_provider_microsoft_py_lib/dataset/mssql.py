@@ -193,7 +193,7 @@ class MsSqlTable(
     @property
     def type(self) -> ResourceType:
         """
-        Get the type of the Dataset.r
+        Get the type of the Dataset.
 
         Returns:
             ResourceType

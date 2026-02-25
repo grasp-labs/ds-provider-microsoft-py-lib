@@ -379,15 +379,15 @@ class MsSqlTable(
             param_map = {col: f"p{idx}" for idx, col in enumerate(key_columns)}
             where_clause = " AND ".join(f"{self._quote_identifier(col)} = :{param_map[col]}" for col in key_columns)
             # Note: This is safe from SQL injection because:
-            # 1. Schema and table names are quoted with quoted_name()
+            # 1. Schema and table names are validated/quoted via _quote_identifier(), which rejects unsafe characters
             # 2. Column names are validated through _quote_identifier() which rejects unsafe characters
             # 3. Values are passed as parameters, not interpolated into the SQL
             if getattr(self.settings, "schema", None):
-                table_identifier = (
-                    f"{quoted_name(self.settings.schema, quote=True)}.{quoted_name(self.settings.table, quote=True)}"
-                )
+                safe_schema = self._quote_identifier(self.settings.schema)
+                safe_table = self._quote_identifier(self.settings.table)
+                table_identifier = f"{safe_schema}.{safe_table}"
             else:
-                table_identifier = f"{quoted_name(self.settings.table, quote=True)}"
+                table_identifier = self._quote_identifier(self.settings.table)
             delete_sql = text(f"DELETE FROM {table_identifier} WHERE {where_clause}")  # nosec B608
 
             # Build payloads using the safe parameter names

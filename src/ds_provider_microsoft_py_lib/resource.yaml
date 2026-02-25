@@ -3,15 +3,15 @@ name: microsoft
 description: Microsoft provider for the DS Business Workflow
 
 linked_service:
-  - name: MICROSOFT_SQL_LINKED_SERVICE
-    kind: DS.RESOURCE.LINKED_SERVICE.MICROSOFT_SQL
+  - name: Microsoft_SQL_LinkedService
+    kind: ds.resource.linked_service.microsoft_sql
     version: 1.0.0
     description: Microsoft SQL Server linked service
     class_name: ds_provider_microsoft_py_lib.linked_service.MsSqlLinkedService
 
 dataset:
-  - name: MICROSOFT_SQL_DATASET
-    kind: DS.RESOURCE.DATASET.MICROSOFT_SQL
+  - name: Microsoft_SQL_Dataset
+    kind: ds.resource.dataset.microsoft_sql
     version: 1.0.0
     description: Microsoft SQL Server dataset
     class_name: ds_provider_microsoft_py_lib.dataset.MsSqlTable

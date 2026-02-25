@@ -565,35 +565,37 @@ def test_close_disposes_engine(settings: MsSqlLinkedServiceSettings) -> None:
     engine_mock.dispose.assert_called_once()
 
 
-def test_create_engine_handles_argument_error(settings: MsSqlLinkedServiceSettings) -> None:
-    """_create_engine() must wrap ArgumentError in ConnectionError."""
+@pytest.mark.parametrize(
+    "exc_type, message, check_details",
+    [
+        (ArgumentError, "Invalid argument in connection string", True),
+        (RuntimeError, "Unexpected error creating engine", False),
+    ],
+)
+def test_create_engine_wraps_exceptions_in_connection_error(
+    settings: MsSqlLinkedServiceSettings,
+    exc_type,
+    message,
+    check_details,
+) -> None:
+    """_create_engine() must wrap engine creation exceptions in ConnectionError."""
     service = make_service(settings)
-    arg_error = ValueError("Invalid argument in connection string")
+    exc_instance = exc_type(message)
 
-    with patch("ds_provider_microsoft_py_lib.linked_service.mssql.create_engine", side_effect=arg_error):
+    with patch(
+        "ds_provider_microsoft_py_lib.linked_service.mssql.create_engine",
+        side_effect=exc_instance,
+    ):
         with pytest.raises(ConnectionError) as exc_info:
             service._create_engine()
 
-        error = exc_info.value
-        assert "Failed to create database engine" in str(error)
+    error = exc_info.value
+    assert "Failed to create database engine" in str(error)
+
+    if check_details:
         assert error.details["server"] == "localhost"
         assert error.details["port"] == 1433
         assert error.details["database"] == "testdb"
-
-
-def test_create_engine_handles_generic_exception(settings: MsSqlLinkedServiceSettings) -> None:
-    """_create_engine() must wrap unexpected exceptions in ConnectionError."""
-    service = make_service(settings)
-    generic_error = RuntimeError("Unexpected error creating engine")
-
-    with patch("ds_provider_microsoft_py_lib.linked_service.mssql.create_engine", side_effect=generic_error):
-        with pytest.raises(ConnectionError) as exc_info:
-            service._create_engine()
-
-        error = exc_info.value
-        assert "Failed to create database engine" in str(error)
-
-
 def test_connect_handles_unexpected_exception_during_connection_test(
     settings: MsSqlLinkedServiceSettings,
 ) -> None:

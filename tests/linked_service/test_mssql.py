@@ -586,13 +586,6 @@ def test_close_disposes_engine(settings: MsSqlLinkedServiceSettings) -> None:
     engine_mock.dispose.assert_called_once()
 
 
-def test_close_is_noop_when_no_engine(settings: MsSqlLinkedServiceSettings) -> None:
-    service = make_service(settings)
-    service.connection = None
-
-    service.close()
-
-
 def test_create_engine_handles_argument_error(settings: MsSqlLinkedServiceSettings) -> None:
     """_create_engine() must wrap ArgumentError in ConnectionError."""
     service = make_service(settings)

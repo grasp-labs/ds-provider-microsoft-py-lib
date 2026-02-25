@@ -24,7 +24,8 @@ import uuid
 import pandas as pd
 from ds_resource_plugin_py_lib.common.resource.dataset.errors import ReadError
 
-from ds_provider_microsoft_py_lib.dataset.mssql import MsSqlTableDatasetSettings, MsSqlTable, CreateSettings
+from ds_provider_microsoft_py_lib.dataset.mssql import MsSqlTableDatasetSettings, MsSqlTable, CreateSettings, \
+    ReadSettings
 from ds_provider_microsoft_py_lib.linked_service.mssql import MsSqlLinkedService, MsSqlLinkedServiceSettings
 
 linked_service = MsSqlLinkedService(
@@ -46,9 +47,13 @@ dataset = MsSqlTable(
         table="my_table2",
         schema="dbo",
         create=CreateSettings(
-                        mode="replace",
-                        index=False,
-                    )
+            index=False,
+            primary_key=True,
+            primary_key_columns=["id"],
+        ),
+        read=ReadSettings(
+                limit=10,
+            ),
     ),
     id=uuid.uuid4(),
     name="testmssqldataset",
@@ -78,13 +83,10 @@ dataset.input = pd.DataFrame(
     {
         "id": pd.Series([1, 2, 3, 4, 5, 6], dtype="Int64"),
         "color": pd.Series(["Grays", "Red", "Blue", "Green", "Yellow", "Purple"], dtype="category"),
-        "dcoll": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05", "2024-01-06"]).tz_localize(
-            "UTC"
-        ),
+        "dcoll": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05", "2024-01-06"]),
         "dtimes": [datetime.datetime.now() for _ in range(6)],
         "active": pd.Series([True, False, True, True, False, True], dtype="boolean"),
         "score": pd.Series([10.5, 8.2, 7.0, 9.1, 6.4, 5.5], dtype="float32"),
-        "delta": pd.to_timedelta(["1 days", "2 days", "3 days", "4 days", "5 days", "6 days"]),
     }
 )
 dataset.create()

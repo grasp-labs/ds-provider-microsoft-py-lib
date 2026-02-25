@@ -21,10 +21,11 @@ Example:
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Generic, Literal, TypeVar, cast
+from typing import Any, Generic, TypeVar, cast
 
 import pandas as pd
 from ds_common_logger_py_lib import Logger
+from ds_common_serde_py_lib import Serializable
 from ds_resource_plugin_py_lib.common.resource.dataset import (
     DatasetSettings,
     DatasetStorageFormatType,
@@ -37,13 +38,13 @@ from ds_resource_plugin_py_lib.common.resource.dataset.errors import (
     PurgeError,
     ReadError,
 )
-from ds_resource_plugin_py_lib.common.resource.errors import NotSupportedError
-from ds_resource_plugin_py_lib.common.resource.linked_service.errors import ConnectionError
+from ds_resource_plugin_py_lib.common.resource.errors import NotSupportedError, ValidationError
 from ds_resource_plugin_py_lib.common.serde.deserialize import PandasDeserializer
 from ds_resource_plugin_py_lib.common.serde.serialize import PandasSerializer
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Column,
     DateTime,
     Float,
     Integer,
@@ -53,6 +54,7 @@ from sqlalchemy import (
     and_,
     asc,
     desc,
+    insert,
     quoted_name,
     select,
     text,
@@ -67,8 +69,21 @@ from ..linked_service.mssql import MsSqlLinkedService
 logger = Logger.get_logger(__name__, package=True)
 
 
+def quote_identifier(identifier: str) -> str:
+    """
+    Safely quote SQL identifiers for dynamic DDL statements.
+
+    Args:
+        identifier: Raw SQL identifier.
+
+    Returns:
+        str: Properly quoted SQL identifier.
+    """
+    return '"' + identifier.replace('"', '""') + '"'
+
+
 @dataclass(kw_only=True)
-class ReadSettings:
+class ReadSettings(Serializable):
     """
     Settings specific to the read() operation.
 
@@ -110,7 +125,7 @@ class ReadSettings:
 
 
 @dataclass(kw_only=True)
-class CreateSettings:
+class CreateSettings(Serializable):
     """
     Settings specific to the create() operation.
 
@@ -118,28 +133,31 @@ class CreateSettings:
     and do not affect read(), delete(), update(), or rename() operations.
     """
 
-    mode: Literal["fail", "append", "replace"] = "fail"
-    """
-    Write mode for the data.
-
-    Options:
-    - "fail": Raise an error if the table already exists.
-    - "append": Insert new rows (default). Creates table if it doesn't exist.
-    - "replace": Drop table if exists, recreate, then insert.
-    """
-
     index: bool = False
     """
     Whether to include the index in the output.
     """
 
+    primary_key: bool = False
+    """Whether to create a primary key when creating a new table."""
+
+    primary_key_columns: Sequence[str] | None = None
+    """Primary key columns to create when `primary_key` is enabled."""
+
 
 @dataclass(kw_only=True)
 class MsSqlTableDatasetSettings(DatasetSettings):
     table: str
+    """Schema for dataset operations."""
+
     schema: str
-    read: ReadSettings | None = None
-    create: CreateSettings | None = None
+    """Schema for dataset operations."""
+
+    read: ReadSettings = field(default_factory=ReadSettings)
+    """Settings for read()."""
+
+    create: CreateSettings = field(default_factory=CreateSettings)
+    """Settings for create()."""
 
 
 MsSqlTableDatasetSettingsType = TypeVar(
@@ -175,7 +193,7 @@ class MsSqlTable(
     @property
     def type(self) -> ResourceType:
         """
-        Get the type of the Dataset.
+        Get the type of the Dataset.r
 
         Returns:
             ResourceType
@@ -196,109 +214,114 @@ class MsSqlTable(
             ConnectionError: If the connection fails.
             CreateError: If the create operation fails.
         """
-        # Per contract: Empty input is not an error, return immediately
+        logger.debug("Starting create operation for %s.%s", self.settings.schema, self.settings.table)
         if self.input is None or self.input.empty:
-            logger.debug("Empty input provided to create(); returning without action.")
+            logger.debug("Create skipped because input is empty.")
+            self.output = self._output_from_empty_input()
             return
 
-        create_props = self.settings.create or CreateSettings()
-
-        if self.linked_service.connection is None:
-            raise ConnectionError(message="Connection pool is not initialized.")
-
-        if self.input is None or self.input.empty:
-            raise CreateError(
-                message="Input is empty or None.",
-                status_code=400,
-                details={
-                    "table": self.settings.table,
-                    "schema": self.settings.schema,
-                    "settings": self.settings.create,
-                },
-            )
-
         try:
-            self.input.to_sql(
-                name=self.settings.table,
-                con=self.linked_service.connection,
-                schema=self.settings.schema,
-                if_exists=create_props.mode,
-                index=create_props.index,
-                dtype=cast("Any", self._pandas_dtype_to_sqlalchemy(self.input.dtypes)),
+            create_input = self.input.reset_index() if self.settings.create.index else self.input.copy()
+            logger.debug(
+                "Create input prepared with %d rows and columns=%s",
+                len(create_input),
+                list(create_input.columns),
             )
-            # Per contract: Populate output with the affected rows (copy of input)
+            with self.linked_service.connection.begin() as conn:
+                table_exists = bool(inspect(conn).has_table(self.settings.table, schema=self.settings.schema))
+                logger.debug("Table exists=%s for %s.%s", table_exists, self.settings.schema, self.settings.table)
+                if table_exists:
+                    table = self._get_table()
+                else:
+                    logger.debug("Table does not exist; creating new table for create operation.")
+                    table = self._build_table_from_input(create_input)
+                    table.create(bind=conn)
+                self._copy_into_table(conn, table, create_input)
             self.output = self.input.copy()
             self._set_schema(self.output)
-            logger.info(f"Successfully created/inserted {len(self.output)} rows to {self.settings.schema}.{self.settings.table}")
-        except Exception as exc:
-            logger.error(f"Failed to write data to table: {exc}", exc_info=True)
+            logger.debug("Create completed successfully. Rows written=%d", len(self.output))
+        except ValidationError as exc:
+            logger.error("Create validation failed: %s", exc.message)
             raise CreateError(
-                message=f"Failed to write data to table '{self.settings.schema}.{self.settings.table}': {exc!s}",
+                message=exc.message,
+                status_code=exc.status_code,
+                details={**(exc.details or {}), "settings": self.settings.create.serialize()},
+            ) from exc
+        except Exception as exc:
+            logger.error("Create failed: %s", exc)
+            raise CreateError(
+                message=f"Failed to write data to table: {exc!s}",
                 status_code=500,
                 details={
                     "table": self.settings.table,
                     "schema": self.settings.schema,
-                    "row_count": len(self.input),
+                    "settings": self.settings.create.serialize(),
                 },
             ) from exc
 
     def read(self, **_kwargs: Any) -> None:
         """
-        Read data from the specified table.
-
-        Reads data from the configured table using optional filters,
-        column selection, and ordering.
+        Read rows from the configured table into `self.output`.
 
         Args:
-            _kwargs: Additional keyword arguments (ignored).
+            _kwargs: Additional keyword arguments for interface compatibility.
+
+        Returns:
+            None
 
         Raises:
-            ConnectionError: If the connection is not established.
-            ReadError: If the read operation fails.
+            ReadError: If reading data fails.
         """
-        if self.linked_service.connection is None:
-            raise ConnectionError(message="Connection pool is not initialized.")
-
+        logger.debug("Starting read operation for %s.%s", self.settings.schema, self.settings.table)
+        stmt: Select[Any] | None = None
         try:
+            self._validate_read_settings()
             table = self._get_table()
+            stmt = self._build_select_columns(table)
+            stmt = self._build_filters(stmt, table)
+            stmt = self._build_order_by(stmt, table)
+
+            if self.settings.read.limit is not None:
+                stmt = stmt.limit(self.settings.read.limit)
+
+            logger.debug("Executing query: %s", stmt)
+            with self.linked_service.connection.connect() as conn:
+                rows = conn.execute(stmt).mappings().all()
+            self.output = pd.DataFrame.from_records(rows)  # type: ignore[type-var]
+            logger.debug("Read completed successfully. Rows read=%d", len(self.output))
         except NoSuchTableError as exc:
+            logger.error(
+                "Table '%s' does not exist in schema '%s'.",
+                self.settings.table,
+                self.settings.schema,
+            )
             raise ReadError(
-                message=f"Table '{self.settings.schema}.{self.settings.table}' does not exist.",
+                message=f"Table '{self.settings.table}' does not exist in schema '{self.settings.schema}'.",
                 status_code=404,
                 details={
                     "table": self.settings.table,
                     "schema": self.settings.schema,
+                    "settings": self.settings.read.serialize(),
                 },
             ) from exc
-
-        read_props = self.settings.read
-
-        stmt = self._build_select_columns(table, read_props)
-        stmt = self._build_filters(stmt, table, read_props)
-        stmt = self._build_order_by(stmt, table, read_props)
-
-        if read_props and read_props.limit is not None:
-            stmt = stmt.limit(read_props.limit)
-
-        logger.debug(f"Executing read query: {stmt}")
-        try:
-            chunks = pd.read_sql(
-                stmt,
-                con=self.linked_service.connection,
-                chunksize=100_000,
-                dtype_backend="pyarrow",
-            )
-            self.output = pd.concat(list(chunks), ignore_index=True)
-            self._set_schema(self.output)
-            logger.info(f"Successfully read {len(self.output)} rows from {self.settings.schema}.{self.settings.table}")
-        except Exception as exc:
-            logger.error(f"Failed to read data from table: {exc}", exc_info=True)
+        except ValidationError as exc:
+            logger.error("Validation error: %s", exc)
+            details = {**(exc.details or {}), "settings": self.settings.read.serialize()}
             raise ReadError(
-                message=f"Failed to read data from table '{self.settings.schema}.{self.settings.table}': {exc!s}",
+                message=exc.message,
+                status_code=exc.status_code,
+                details=details,
+            ) from exc
+        except Exception as exc:
+            logger.error("Failed to read data from table: %s", exc)
+            raise ReadError(
+                message=f"Failed to read data from table: {exc!s}",
                 status_code=500,
                 details={
                     "table": self.settings.table,
                     "schema": self.settings.schema,
+                    "query": str(stmt) if stmt is not None else None,
+                    "settings": self.settings.read.serialize(),
                 },
             ) from exc
 
@@ -320,12 +343,15 @@ class MsSqlTable(
 
         try:
             # DROP TABLE IF EXISTS ensures idempotency
-            query = f"DROP TABLE IF EXISTS {quoted_name(self.settings.table, quote=True)};"
+            query = (
+                f"DROP TABLE IF EXISTS "
+                f"{quoted_name(self.settings.schema, quote=True)}."
+                f"{quoted_name(self.settings.table, quote=True)};"
+            )
             logger.debug(f"Dropping table: {self.settings.schema}.{self.settings.table}")
 
-            with self.linked_service.connection.connect() as conn:
+            with self.linked_service.connection.begin() as conn:
                 conn.execute(text(query))
-                conn.commit()
 
             logger.info(f"Successfully purged table: {self.settings.schema}.{self.settings.table}")
         except Exception as exc:
@@ -367,10 +393,16 @@ class MsSqlTable(
             param_map = {col: f"p{idx}" for idx, col in enumerate(key_columns)}
             where_clause = " AND ".join(f"{self._quote_identifier(col)} = :{param_map[col]}" for col in key_columns)
             # Note: This is safe from SQL injection because:
-            # 1. Table name is quoted with quoted_name()
+            # 1. Schema and table names are quoted with quoted_name()
             # 2. Column names are validated through _quote_identifier() which rejects unsafe characters
             # 3. Values are passed as parameters, not interpolated into the SQL
-            delete_sql = text(f"DELETE FROM {quoted_name(self.settings.table, quote=True)} WHERE {where_clause}")  # nosec B608
+            if getattr(self.settings, "schema", None):
+                table_identifier = (
+                    f"{quoted_name(self.settings.schema, quote=True)}.{quoted_name(self.settings.table, quote=True)}"
+                )
+            else:
+                table_identifier = f"{quoted_name(self.settings.table, quote=True)}"
+            delete_sql = text(f"DELETE FROM {table_identifier} WHERE {where_clause}")  # nosec B608
 
             # Build payloads using the safe parameter names
             records = self.input.to_dict(orient="records")
@@ -584,77 +616,105 @@ class MsSqlTable(
                 f"Column '{column_name}' not found in table '{self.settings.table}'. Available columns: {available_columns}"
             )
 
-    def _build_select_columns(self, table: Table, read_props: ReadSettings | None) -> Select[Any]:
+    def _validate_columns(self, table: Table, column_names: Sequence[str]) -> None:
         """
-        Build the SELECT clause of the query.
+        Validate that all requested columns exist in the reflected table.
 
         Args:
-            table: The SQLAlchemy Table object.
-            read_props: Read-specific settings.
+            table: Reflected SQLAlchemy table.
+            column_names: Column names to validate.
 
         Returns:
-            Select: The SELECT statement with specified columns or all columns.
+            None
 
         Raises:
-            ValueError: If any specified column doesn't exist in the table.
+            ValidationError: If one or more columns do not exist in the table.
         """
-        if read_props and read_props.columns:
-            for col_name in read_props.columns:
-                self._validate_column(table, col_name)
+        available_columns = list(table.c.keys())
+        missing_columns = list(dict.fromkeys(col for col in column_names if col not in table.c))
+        if missing_columns:
+            raise ValidationError(
+                message=f"Column(s) not found in table '{self.settings.table}'.",
+                details={
+                    "table": self.settings.table,
+                    "schema": self.settings.schema,
+                    "missing_columns": missing_columns,
+                    "available_columns": available_columns,
+                },
+            )
 
-            selected_columns = [table.c[col_name] for col_name in read_props.columns]
+    def _build_select_columns(self, table: Table) -> Select[Any]:
+        """
+        Build a SELECT statement for configured columns or all columns.
+
+        Args:
+            table: Reflected SQLAlchemy table.
+
+        Returns:
+            Select[Any]: SELECT statement with chosen columns.
+
+        Raises:
+            ValidationError: If any selected column does not exist.
+        """
+        if self.settings.read.columns:
+            self._validate_columns(table, self.settings.read.columns)
+
+            selected_columns = [table.c[col_name] for col_name in self.settings.read.columns]
             return select(*selected_columns)
 
         return select(table)
 
-    def _build_filters(self, stmt: Select[Any], table: Table, read_props: ReadSettings | None) -> Select[Any]:
+    def _build_filters(self, stmt: Select[Any], table: Table) -> Select[Any]:
         """
-        Build the WHERE clause of the query from filters.
+        Apply equality filters from read settings to the SELECT statement.
 
         Args:
-            stmt: The current SELECT statement.
-            table: The SQLAlchemy Table object.
-            read_props: Read-specific settings.
+            stmt: Current SELECT statement.
+            table: Reflected SQLAlchemy table.
 
         Returns:
-            Select: The SELECT statement with WHERE clause applied.
+            Select[Any]: SELECT statement with WHERE conditions applied.
 
         Raises:
-            ValueError: If any filter column doesn't exist in the table.
+            ValidationError: If any filter column does not exist.
         """
-        if not read_props or not read_props.filters:
+        if not self.settings.read.filters:
             return stmt
 
-        for col_name in read_props.filters:
-            self._validate_column(table, col_name)
+        self._validate_columns(table, list(self.settings.read.filters.keys()))
 
-        filter_conditions = [table.c[col_name] == value for col_name, value in read_props.filters.items()]
+        filter_conditions = [table.c[col_name] == value for col_name, value in self.settings.read.filters.items()]
 
         return stmt.where(and_(*filter_conditions))
 
-    def _build_order_by(self, stmt: Select[Any], table: Table, read_props: ReadSettings | None) -> Select[Any]:
+    def _build_order_by(self, stmt: Select[Any], table: Table) -> Select[Any]:
         """
-        Build the ORDER BY clause of the query.
+        Apply ORDER BY clauses from read settings to the SELECT statement.
 
         Args:
-            stmt: The current SELECT statement.
-            table: The SQLAlchemy Table object.
-            read_props: Read-specific settings.
+            stmt: Current SELECT statement.
+            table: Reflected SQLAlchemy table.
 
         Returns:
-            Select: The SELECT statement with ORDER BY clause applied.
+            Select[Any]: SELECT statement with ORDER BY applied.
 
         Raises:
-            ValueError: If any order_by column doesn't exist in the table.
+            ValidationError: If any order-by column does not exist.
         """
-        if not read_props or not read_props.order_by:
+        if not self.settings.read.order_by:
             return stmt
 
+        order_columns = [
+            col_name if isinstance(order_spec, tuple) else order_spec
+            for order_spec in self.settings.read.order_by
+            for col_name in ([order_spec[0]] if isinstance(order_spec, tuple) else [order_spec])
+        ]
+        self._validate_columns(table, order_columns)
+
         order_clauses = []
-        for order_spec in read_props.order_by:
+        for order_spec in self.settings.read.order_by:
             if isinstance(order_spec, tuple):
                 col_name, direction = order_spec
-                self._validate_column(table, col_name)
 
                 col = table.c[col_name]
                 if direction.lower() == "desc":
@@ -662,7 +722,6 @@ class MsSqlTable(
                 else:
                     order_clauses.append(asc(col))
             else:
-                self._validate_column(table, order_spec)
                 order_clauses.append(asc(table.c[order_spec]))
 
         return stmt.order_by(*order_clauses)
@@ -709,11 +768,203 @@ class MsSqlTable(
         }
 
         read_settings = getattr(self.settings, "read", None)
-        if read_settings is not None and read_settings.query_filter is not None:
-            details["query_filter"] = read_settings.query_filter
+        if read_settings is not None and read_settings.filters is not None:
+            details["filters"] = read_settings.filters
 
         delete_settings = getattr(self.settings, "delete", None)
         if delete_settings is not None:
             details["delete_table"] = str(delete_settings.delete_table)
 
         return details
+
+    def _copy_into_table(self, conn: Any, table: Table, content: pd.DataFrame) -> None:
+        """
+        Insert rows into SQL Server table using raw SQL for proper transaction handling.
+
+        Args:
+            conn: SQLAlchemy connection object.
+            table: SQLAlchemy Table object (metadata only).
+            content: DataFrame containing rows to insert.
+        """
+        if content.empty:
+            return
+
+        logger.debug(f"Inserting {len(content)} rows into {self.settings.schema}.{self.settings.table}")
+
+        # Check if any columns are identity columns and if input includes them
+        identity_columns = [col.name for col in table.columns if hasattr(col, "identity") and col.identity]
+        has_identity_in_input = any(col in content.columns for col in identity_columns)
+
+        try:
+            # Enable IDENTITY_INSERT if table has identity columns and input includes them
+            if identity_columns and has_identity_in_input:
+                table_ref = f"[{self.settings.schema}].[{self.settings.table}]"
+                enable_sql = f"SET IDENTITY_INSERT {table_ref} ON"
+                logger.debug(f"Enabling IDENTITY_INSERT for {self.settings.schema}.{self.settings.table}")
+                conn.execute(text(enable_sql))
+
+            stmt = insert(table)
+            records = content.to_dict(orient="records")
+
+            # Execute insert with all records at once
+            conn.execute(stmt, records)
+
+        finally:
+            # Always disable IDENTITY_INSERT if it was enabled
+            if identity_columns and has_identity_in_input:
+                table_ref = f"[{self.settings.schema}].[{self.settings.table}]"
+                disable_sql = f"SET IDENTITY_INSERT {table_ref} OFF"
+                logger.debug(f"Disabling IDENTITY_INSERT for {self.settings.schema}.{self.settings.table}")
+                conn.execute(text(disable_sql))
+
+    def _resolve_create_primary_key_columns(
+        self,
+        content: pd.DataFrame,
+    ) -> Sequence[str] | None:
+        """
+        Resolve and validate create-time primary key columns.
+
+        Args:
+            content: Input DataFrame used for table creation.
+
+        Returns:
+            Sequence[str] | None: Primary key columns for new table creation.
+
+        Raises:
+            ValidationError: If `primary_key` is enabled but columns are invalid.
+        """
+        if not self.settings.create.primary_key:
+            logger.debug("Create primary key disabled in settings.")
+            return None
+
+        if not self.settings.create.primary_key_columns:
+            logger.error("Create primary key is enabled but primary_key_columns is missing.")
+            raise ValidationError(
+                message="Missing primary key columns for create().",
+                status_code=400,
+                details={
+                    "table": self.settings.table,
+                    "schema": self.settings.schema,
+                    "create_settings": self.settings.create.serialize(),
+                },
+            )
+
+        missing_columns = [col for col in self.settings.create.primary_key_columns if col not in content.columns]
+        if missing_columns:
+            logger.error("Create primary key columns missing from input: %s", missing_columns)
+            raise ValidationError(
+                message="Primary key columns do not exist in create input.",
+                status_code=400,
+                details={
+                    "table": self.settings.table,
+                    "schema": self.settings.schema,
+                    "missing_columns": missing_columns,
+                    "primary_key_columns": list(self.settings.create.primary_key_columns),
+                },
+            )
+
+        logger.debug("Resolved create primary key columns: %s", list(self.settings.create.primary_key_columns))
+        return list(self.settings.create.primary_key_columns)
+
+    def _build_table_from_input(
+        self,
+        content: pd.DataFrame,
+    ) -> Table:
+        """
+        Build a SQLAlchemy Table definition from input DataFrame dtypes.
+
+        Args:
+            content: Input DataFrame to build the table from.
+
+        Returns:
+            Table: SQLAlchemy Table definition.
+        """
+        schema_name = quoted_name(self.settings.schema, quote=True)
+        table_name = quoted_name(self.settings.table, quote=True)
+        metadata = MetaData(schema=schema_name)
+        dtype_map = self._pandas_dtype_to_sqlalchemy(content.dtypes)
+        primary_key_columns = self._resolve_create_primary_key_columns(content)
+        primary_key_set = set(primary_key_columns or [])
+        logger.debug(
+            "Building table from input with columns=%s and primary_key_columns=%s",
+            list(content.columns),
+            list(primary_key_set),
+        )
+        columns = [
+            Column(
+                str(col_name),
+                cast("Any", dtype_map[str(col_name)]),
+                primary_key=str(col_name) in primary_key_set,
+                nullable=str(col_name) not in primary_key_set,
+            )
+            for col_name in content.columns
+        ]
+        return Table(
+            table_name,
+            metadata,
+            *columns,
+            schema=schema_name,
+        )
+
+    def _output_from_empty_input(self) -> pd.DataFrame:
+        """
+        Build a consistent empty-operation output while preserving input schema.
+
+        Returns:
+            pd.DataFrame: Empty dataframe or a schema-preserving input copy.
+        """
+        input_value = cast("Any", self.input)
+        if input_value is None:
+            return pd.DataFrame()
+        return cast("pd.DataFrame", input_value.copy())
+
+    def _validate_read_settings(self) -> None:
+        """
+        Validate read settings before query construction.
+
+        Returns:
+            None
+
+        Raises:
+            ValidationError: If limit or order direction is invalid.
+        """
+        read_settings = self.settings.read
+
+        if read_settings.limit is not None and read_settings.limit <= 0:
+            raise ValidationError(
+                message="Read limit must be greater than 0.",
+                status_code=400,
+                details={
+                    "table": self.settings.table,
+                    "schema": self.settings.schema,
+                    "limit": read_settings.limit,
+                },
+            )
+
+        if not read_settings.order_by:
+            return
+
+        invalid_order_specs: list[dict[str, str]] = []
+        for order_spec in read_settings.order_by:
+            if not isinstance(order_spec, tuple):
+                continue
+
+            col_name, direction = order_spec
+            if direction.lower() not in {"asc", "desc"}:
+                invalid_order_specs.append(
+                    {
+                        "column": col_name,
+                        "direction": direction,
+                    }
+                )
+
+        if invalid_order_specs:
+            raise ValidationError(
+                message="Invalid order_by direction. Use 'asc' or 'desc'.",
+                status_code=400,
+                details={
+                    "table": self.settings.table,
+                    "schema": self.settings.schema,
+                    "invalid_order_by": invalid_order_specs,
+                },
+            )

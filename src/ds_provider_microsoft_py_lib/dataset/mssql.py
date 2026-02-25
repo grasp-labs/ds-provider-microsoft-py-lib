@@ -16,7 +16,6 @@ Example:
 ... )
 >>> dataset.read()
 """
-"""
 
 import re
 from collections.abc import Sequence

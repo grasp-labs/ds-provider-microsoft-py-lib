@@ -52,8 +52,11 @@ dataset = MsSqlTable(
             primary_key_columns=["id"],
         ),
         read=ReadSettings(
-                limit=10,
-            ),
+            limit=10,
+            columns=["id", "color", "score", "active"],
+            filters={"active": True},
+            order_by=[("score", "desc"), "id"],
+        ),
     ),
     id=uuid.uuid4(),
     name="testmssqldataset",
@@ -94,7 +97,7 @@ dataset.create()
 dataset.read()
 output = dataset.output
 
-print("Dataset created. The output of the dataset after creation is:")
+print("Dataset created. Read with filters (active=True), columns subset, ordered by score desc:")
 print(output)
 
 dataset.input = pd.DataFrame(

@@ -49,14 +49,23 @@ class MsSqlLinkedServiceSettings(LinkedServiceSettings):
     """
 
     server: str
+    """The hostname or IP address of the SQL Server instance."""
     database: str
+    """The name of the database to connect to."""
     username: str
+    """The username for authentication."""
     password: str = field(metadata={"mask": True})
+    """The password for authentication. This field is masked in logs and serialized output."""
     port: int = 1433
+    """The port number for the SQL Server instance. Defaults to 1433, the standard port for SQL Server."""
     driver: str = "ODBC Driver 18 for SQL Server"
+    """The ODBC driver to use for the connection. Defaults to "ODBC Driver 18 for SQL Server" """
     encrypt: bool = True
+    """Whether to encrypt the connection. Defaults to True."""
     trust_server_certificate: bool = False
+    """Whether to trust the server certificate when encrypting. Defaults to False."""
     connection_timeout: int = 30
+    """The connection timeout in seconds. Defaults to 30."""
 
 
 MsSqlLinkedServiceSettingsType = TypeVar(
@@ -94,6 +103,7 @@ class MsSqlLinkedService(LinkedService[MsSqlLinkedServiceSettingsType], Generic[
 
     settings: MsSqlLinkedServiceSettingsType
     _connection: Engine | None = field(default=None, init=False, repr=False, metadata={"serialize": False})
+    """The SQLAlchemy Engine instance representing the connection to the SQL Server database."""
 
     def check_settings_is_set(self) -> None:
         """

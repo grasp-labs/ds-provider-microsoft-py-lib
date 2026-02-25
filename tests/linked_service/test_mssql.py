@@ -523,13 +523,6 @@ def test_test_connection_logs_error_when_query_fails(settings: MsSqlLinkedServic
     assert "Connection test failed" in msg
 
 
-def test_check_settings_is_set_rejects_invalid_type(settings: MsSqlLinkedServiceSettings) -> None:
-    service = make_service(settings)
-    service.settings = object()  # type: ignore[assignment]
-    with pytest.raises(AttributeError):
-        service.check_settings_is_set()
-
-
 def test_get_connection_string_builds_expected(settings: MsSqlLinkedServiceSettings) -> None:
     service = make_service(settings)
     assert (

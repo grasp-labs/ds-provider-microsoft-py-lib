@@ -10,7 +10,12 @@ Example:
 ...    settings=MsSqlTableDatasetSettings(
 ...        table="your_table_name",
 ...        schema="your_schema_name",
-...        delete=DeleteSettings(delete_table=False)
+...        read=ReadSettings(
+...         limit=10,
+...         columns=["id", "color", "score", "active"],
+...         filters={"active": True},
+...         order_by=[("score", "desc"), "id"],
+...         ),
 ...    )
 ... )
 >>> dataset.read()

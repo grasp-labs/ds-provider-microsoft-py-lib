@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ds-provider-microsoft-py-lib"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 description = "A Python package from the DS library collection"
 dependencies = [
-    "ds-resource-plugin-py-lib>=0.1.0rc1,<1.0.0",
+    "ds-resource-plugin-py-lib>=0.1.0rc2,<1.0.0",
     "ds-common-logger-py-lib>=0.1.0-alpha.5,<1.0.0",
     "pyodbc>=5.3.0,<6.0.0",
     "sqlalchemy>=2.0.46,<2.1.0",

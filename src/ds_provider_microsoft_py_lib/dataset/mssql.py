@@ -327,12 +327,10 @@ class MsSqlTable(
         """
 
         try:
-            # DROP TABLE IF EXISTS ensures idempotency
-            query = (
-                f"DROP TABLE IF EXISTS "
-                f"{quoted_name(self.settings.schema, quote=True)}."
-                f"{quoted_name(self.settings.table, quote=True)};"
-            )
+            # DROP TABLE IF EXISTS ensures idempotency.
+            # Use square brackets for MSSQL identifier escaping to handle
+            # special characters (e.g. periods) in schema/table names.
+            query = f"DROP TABLE IF EXISTS [{self.settings.schema}].[{self.settings.table}];"
             logger.debug(f"Dropping table: {self.settings.schema}.{self.settings.table}")
 
             with self.linked_service.connection.begin() as conn:

@@ -1736,3 +1736,33 @@ def test_validate_read_settings_rejects_invalid_order_direction(
 
     with pytest.raises(ValidationError, match="Invalid order_by direction"):
         table._validate_read_settings()
+
+
+def test_purge_uses_square_bracket_quoting_for_special_chars_in_table_name(linked_service: MagicMock) -> None:
+    """Regression: purge() must use square-bracket quoting so that table names
+    containing periods (e.g. 'objectValuesExcludeZeroLite_1.0') are not
+    mis-interpreted by SQL Server as a schema/table separator.
+
+    Previously, quoted_name() was cast to a string inside an f-string which
+    stripped the quotes, producing invalid SQL like:
+        DROP TABLE IF EXISTS dbo.objectValuesExcludeZeroLite_1.0;
+    The fix produces:
+        DROP TABLE IF EXISTS [dbo].[objectValuesExcludeZeroLite_1.0];
+    """
+    special_settings = MsSqlTableDatasetSettings(
+        table="objectValuesExcludeZeroLite_1.0",
+        schema="dbo",
+    )
+    table = make_table(special_settings, linked_service)
+
+    mock_conn = MagicMock()
+    mock_conn_ctx = MagicMock()
+    mock_conn_ctx.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn_ctx.__exit__ = MagicMock(return_value=None)
+    linked_service.connection.begin = MagicMock(return_value=mock_conn_ctx)
+
+    table.purge()
+
+    mock_conn.execute.assert_called_once()
+    executed_sql = str(mock_conn.execute.call_args[0][0])
+    assert executed_sql == "DROP TABLE IF EXISTS [dbo].[objectValuesExcludeZeroLite_1.0];"

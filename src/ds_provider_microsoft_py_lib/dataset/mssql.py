@@ -765,6 +765,30 @@ class MsSqlTable(
         return details
 
     @staticmethod
+    def _is_na_scalar(v: Any) -> bool:
+        """
+        Check whether *v* is a scalar NA value (NaN, NaT, None, pd.NA).
+
+        ``pd.isna()`` returns an array-like result for non-scalar inputs
+        (list, tuple, dict, ndarray), which makes a bare ``if pd.isna(v)``
+        raise ``ValueError: The truth value of an array is ambiguous``.
+        This helper guards against that by only calling ``pd.isna`` on
+        values that are known to be scalar.
+
+        Args:
+            v: Any value from a record dict.
+
+        Returns:
+            bool: ``True`` when *v* is a scalar NA-like value.
+        """
+        if isinstance(v, (list, tuple, dict)):
+            return False
+        try:
+            return bool(pd.isna(v))
+        except (ValueError, TypeError):
+            return False
+
+    @staticmethod
     def _sanitize_records(records: Sequence[dict[Hashable, Any]]) -> Sequence[dict[Hashable, Any]]:
         """
         Replace NaN and NaT values with None in record dicts.
@@ -774,13 +798,17 @@ class MsSqlTable(
         Converting these sentinel values to ``None`` causes SQLAlchemy to emit
         proper SQL ``NULL`` parameters instead.
 
+        Non-scalar values (lists, tuples, dicts, ndarrays) are left as-is
+        because ``pd.isna()`` returns an array-like result for them, which
+        cannot be evaluated as a boolean.
+
         Args:
             records: Row dicts produced by ``DataFrame.to_dict(orient="records")``.
 
         Returns:
             Sequence[dict[Hashable, Any]]: The same rows with NaN/NaT replaced by None.
         """
-        return [{k: (None if pd.isna(v) else v) for k, v in row.items()} for row in records]
+        return [{k: (None if MsSqlTable._is_na_scalar(v) else v) for k, v in row.items()} for row in records]
 
     @staticmethod
     def _get_identity_columns(table: Table) -> Sequence[str]:

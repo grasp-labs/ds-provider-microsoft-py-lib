@@ -1766,3 +1766,46 @@ def test_purge_uses_square_bracket_quoting_for_special_chars_in_table_name(linke
     mock_conn.execute.assert_called_once()
     executed_sql = str(mock_conn.execute.call_args[0][0])
     assert executed_sql == "DROP TABLE IF EXISTS [dbo].[objectValuesExcludeZeroLite_1.0];"
+
+
+@patch("ds_provider_microsoft_py_lib.dataset.mssql.insert")
+def test_copy_into_table_replaces_nan_with_none(
+    mock_insert: MagicMock,
+    settings: MsSqlTableDatasetSettings,
+    linked_service: MagicMock,
+) -> None:
+    """_copy_into_table must replace NaN/NaT values with None so SQL Server receives proper NULLs.
+
+    Regression: float('nan') sent via ODBC causes TDS protocol error:
+    'The supplied value is not a valid instance of data type float'.
+    """
+    table = make_table(settings, linked_service)
+    mock_conn = MagicMock()
+
+    col = MagicMock()
+    col.name = "value"
+    col.identity = False
+    mock_sa_table = MagicMock()
+    mock_sa_table.columns = [col]
+
+    content = pd.DataFrame(
+        {
+            "name": ["a", "b", None],
+            "value": [1.0, np.nan, 3.0],
+            "ts": [pd.Timestamp("2025-01-01"), pd.NaT, pd.Timestamp("2025-03-01")],
+        }
+    )
+
+    table._copy_into_table(mock_conn, mock_sa_table, content)
+
+    # The insert statement's execute call receives the records list
+    insert_call_args = mock_conn.execute.call_args_list
+    # The actual insert is the first (and only) execute call when there are no identity columns
+    records = insert_call_args[0][0][1]  # second positional arg to execute()
+
+    for record in records:
+        for value in record.values():
+            # No NaN or NaT values should remain — they must be None
+            if value is not None:
+                assert not (isinstance(value, float) and np.isnan(value)), f"Found float NaN in records: {record}"
+                assert value is not pd.NaT, f"Found NaT in records: {record}"

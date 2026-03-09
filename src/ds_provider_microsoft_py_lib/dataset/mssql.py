@@ -18,7 +18,7 @@ Example:
 """
 
 import re
-from collections.abc import Sequence
+from collections.abc import Hashable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar, cast
 
@@ -760,12 +760,59 @@ class MsSqlTable(
 
         return details
 
-    def _copy_into_table(self, conn: Any, table: Table, content: pd.DataFrame) -> None:
+    @staticmethod
+    def _sanitize_records(records: Sequence[dict[Hashable, Any]]) -> Sequence[dict[Hashable, Any]]:
         """
-        Insert rows into SQL Server table using raw SQL for proper transaction handling.
+        Replace NaN and NaT values with None in record dicts.
+
+        SQL Server rejects ``float('nan')`` over the TDS/ODBC protocol with
+        *"The supplied value is not a valid instance of data type float"*.
+        Converting these sentinel values to ``None`` causes SQLAlchemy to emit
+        proper SQL ``NULL`` parameters instead.
 
         Args:
-            conn: SQLAlchemy connection object.
+            records: Row dicts produced by ``DataFrame.to_dict(orient="records")``.
+
+        Returns:
+            Sequence[dict[Hashable, Any]]: The same rows with NaN/NaT replaced by None.
+        """
+        return [{k: (None if pd.isna(v) else v) for k, v in row.items()} for row in records]
+
+    @staticmethod
+    def _get_identity_columns(table: Table) -> Sequence[str]:
+        """
+        Return the names of identity (auto-increment) columns on *table*.
+
+        Args:
+            table: A reflected or constructed SQLAlchemy Table.
+
+        Returns:
+            Sequence[str]: Column names that have an identity property.
+        """
+        return [col.name for col in table.columns if hasattr(col, "identity") and col.identity]
+
+    def _set_identity_insert(self, conn: Any, *, enabled: bool) -> None:
+        """
+        Toggle ``IDENTITY_INSERT`` for the configured table.
+
+        Args:
+            conn: Active SQLAlchemy connection.
+            enabled: ``True`` to turn identity insert ON, ``False`` for OFF.
+        """
+        state = "ON" if enabled else "OFF"
+        table_ref = f"[{self.settings.schema}].[{self.settings.table}]"
+        logger.debug(f"Setting IDENTITY_INSERT {state} for {self.settings.schema}.{self.settings.table}")
+        conn.execute(text(f"SET IDENTITY_INSERT {table_ref} {state}"))
+
+    def _copy_into_table(self, conn: Any, table: Table, content: pd.DataFrame) -> None:
+        """
+        Insert rows from a DataFrame into a SQL Server table.
+
+        Handles identity-column awareness (toggling ``IDENTITY_INSERT``) and
+        sanitises NaN / NaT values so that SQL Server receives valid parameters.
+
+        Args:
+            conn: SQLAlchemy connection inside an active transaction.
             table: SQLAlchemy Table object (metadata only).
             content: DataFrame containing rows to insert.
         """
@@ -774,31 +821,18 @@ class MsSqlTable(
 
         logger.debug(f"Inserting {len(content)} rows into {self.settings.schema}.{self.settings.table}")
 
-        # Check if any columns are identity columns and if input includes them
-        identity_columns = [col.name for col in table.columns if hasattr(col, "identity") and col.identity]
-        has_identity_in_input = any(col in content.columns for col in identity_columns)
+        identity_columns = self._get_identity_columns(table)
+        needs_identity_insert = bool(identity_columns) and any(col in content.columns for col in identity_columns)
 
         try:
-            # Enable IDENTITY_INSERT if table has identity columns and input includes them
-            if identity_columns and has_identity_in_input:
-                table_ref = f"[{self.settings.schema}].[{self.settings.table}]"
-                enable_sql = f"SET IDENTITY_INSERT {table_ref} ON"
-                logger.debug(f"Enabling IDENTITY_INSERT for {self.settings.schema}.{self.settings.table}")
-                conn.execute(text(enable_sql))
+            if needs_identity_insert:
+                self._set_identity_insert(conn, enabled=True)
 
-            stmt = insert(table)
-            records = content.to_dict(orient="records")
-
-            # Execute insert with all records at once
-            conn.execute(stmt, records)
-
+            records = self._sanitize_records(content.to_dict(orient="records"))
+            conn.execute(insert(table), records)
         finally:
-            # Always disable IDENTITY_INSERT if it was enabled
-            if identity_columns and has_identity_in_input:
-                table_ref = f"[{self.settings.schema}].[{self.settings.table}]"
-                disable_sql = f"SET IDENTITY_INSERT {table_ref} OFF"
-                logger.debug(f"Disabling IDENTITY_INSERT for {self.settings.schema}.{self.settings.table}")
-                conn.execute(text(disable_sql))
+            if needs_identity_insert:
+                self._set_identity_insert(conn, enabled=False)
 
     def _resolve_create_primary_key_columns(
         self,

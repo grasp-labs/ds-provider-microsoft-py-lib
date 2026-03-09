@@ -98,7 +98,9 @@ def test_purge_raises_purge_error(settings: MsSqlTableDatasetSettings, linked_se
     mock_conn_ctx.__exit__ = MagicMock(return_value=None)
     mock_conn.execute.side_effect = RuntimeError("DB error")
     linked_service.connection.begin = MagicMock(return_value=mock_conn_ctx)
-    with pytest.raises(PurgeError):
+    mock_inspector = MagicMock()
+    mock_inspector.has_table.return_value = True
+    with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector), pytest.raises(PurgeError):
         table.purge()
 
 
@@ -131,9 +133,12 @@ def test_purge_is_idempotent(settings: MsSqlTableDatasetSettings, linked_service
     mock_conn_ctx = MagicMock()
     mock_conn_ctx.__enter__ = MagicMock(return_value=mock_conn)
     mock_conn_ctx.__exit__ = MagicMock(return_value=None)
-    linked_service.connection.connect = MagicMock(return_value=mock_conn_ctx)
-    table.purge()
-    table.purge()
+    linked_service.connection.begin = MagicMock(return_value=mock_conn_ctx)
+    mock_inspector = MagicMock()
+    mock_inspector.has_table.return_value = True
+    with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector):
+        table.purge()
+        table.purge()
 
 
 def test_list_is_idempotent(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
@@ -171,9 +176,59 @@ def test_purge_does_not_populate_output(settings: MsSqlTableDatasetSettings, lin
     mock_conn_ctx = MagicMock()
     mock_conn_ctx.__enter__ = MagicMock(return_value=mock_conn)
     mock_conn_ctx.__exit__ = MagicMock(return_value=None)
-    linked_service.connection.connect = MagicMock(return_value=mock_conn_ctx)
-    table.purge()
+    linked_service.connection.begin = MagicMock(return_value=mock_conn_ctx)
+    mock_inspector = MagicMock()
+    mock_inspector.has_table.return_value = True
+    with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector):
+        table.purge()
     assert table.output is None
+
+
+# Lines 332-337 - purge() early return when table does not exist
+def test_purge_noop_when_table_does_not_exist(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """purge() must be a no-op when the table does not exist - no DROP executed."""
+    table = make_table(settings, linked_service)
+    mock_conn = MagicMock()
+    mock_conn_ctx = MagicMock()
+    mock_conn_ctx.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn_ctx.__exit__ = MagicMock(return_value=None)
+    linked_service.connection.begin = MagicMock(return_value=mock_conn_ctx)
+    mock_inspector = MagicMock()
+    mock_inspector.has_table.return_value = False
+    with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector):
+        table.purge()
+
+    mock_conn.execute.assert_not_called()
+
+
+def test_purge_noop_does_not_populate_output(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """purge() must not set self.output when the table does not exist."""
+    table = make_table(settings, linked_service)
+    mock_conn = MagicMock()
+    mock_conn_ctx = MagicMock()
+    mock_conn_ctx.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn_ctx.__exit__ = MagicMock(return_value=None)
+    linked_service.connection.begin = MagicMock(return_value=mock_conn_ctx)
+    mock_inspector = MagicMock()
+    mock_inspector.has_table.return_value = False
+    with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector):
+        table.purge()
+
+    assert table.output is None
+
+
+def test_purge_noop_does_not_raise(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """purge() on a non-existent table must not raise PurgeError (contract: idempotent)."""
+    table = make_table(settings, linked_service)
+    mock_conn = MagicMock()
+    mock_conn_ctx = MagicMock()
+    mock_conn_ctx.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn_ctx.__exit__ = MagicMock(return_value=None)
+    linked_service.connection.begin = MagicMock(return_value=mock_conn_ctx)
+    mock_inspector = MagicMock()
+    mock_inspector.has_table.return_value = False
+    with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector):
+        table.purge()  # should not raise
 
 
 def test_close_does_not_populate_output(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
@@ -508,8 +563,10 @@ def test_purge_with_quoted_table_name(settings: MsSqlTableDatasetSettings, linke
     mock_conn_ctx.__enter__ = MagicMock(return_value=mock_conn)
     mock_conn_ctx.__exit__ = MagicMock(return_value=None)
     linked_service.connection.begin = MagicMock(return_value=mock_conn_ctx)
-
-    table.purge()
+    mock_inspector = MagicMock()
+    mock_inspector.has_table.return_value = True
+    with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector):
+        table.purge()
 
     # Verify execute was called (meaning the SQL was prepared and executed)
     mock_conn.execute.assert_called_once()
@@ -917,8 +974,10 @@ def test_purge_executes_drop_table_statement(settings: MsSqlTableDatasetSettings
     mock_conn_ctx.__enter__ = MagicMock(return_value=mock_conn)
     mock_conn_ctx.__exit__ = MagicMock(return_value=None)
     linked_service.connection.begin = MagicMock(return_value=mock_conn_ctx)
-
-    table.purge()
+    mock_inspector = MagicMock()
+    mock_inspector.has_table.return_value = True
+    with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector):
+        table.purge()
 
     # Verify that a SQL statement was executed
     mock_conn.execute.assert_called_once()
@@ -1760,9 +1819,54 @@ def test_purge_uses_square_bracket_quoting_for_special_chars_in_table_name(linke
     mock_conn_ctx.__enter__ = MagicMock(return_value=mock_conn)
     mock_conn_ctx.__exit__ = MagicMock(return_value=None)
     linked_service.connection.begin = MagicMock(return_value=mock_conn_ctx)
-
-    table.purge()
+    mock_inspector = MagicMock()
+    mock_inspector.has_table.return_value = True
+    with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector):
+        table.purge()
 
     mock_conn.execute.assert_called_once()
     executed_sql = str(mock_conn.execute.call_args[0][0])
     assert executed_sql == "DROP TABLE IF EXISTS [dbo].[objectValuesExcludeZeroLite_1.0];"
+
+
+@patch("ds_provider_microsoft_py_lib.dataset.mssql.insert")
+def test_copy_into_table_replaces_nan_with_none(
+    mock_insert: MagicMock,
+    settings: MsSqlTableDatasetSettings,
+    linked_service: MagicMock,
+) -> None:
+    """_copy_into_table must replace NaN/NaT values with None so SQL Server receives proper NULLs.
+
+    Regression: float('nan') sent via ODBC causes TDS protocol error:
+    'The supplied value is not a valid instance of data type float'.
+    """
+    table = make_table(settings, linked_service)
+    mock_conn = MagicMock()
+
+    col = MagicMock()
+    col.name = "value"
+    col.identity = False
+    mock_sa_table = MagicMock()
+    mock_sa_table.columns = [col]
+
+    content = pd.DataFrame(
+        {
+            "name": ["a", "b", None],
+            "value": [1.0, np.nan, 3.0],
+            "ts": [pd.Timestamp("2025-01-01"), pd.NaT, pd.Timestamp("2025-03-01")],
+        }
+    )
+
+    table._copy_into_table(mock_conn, mock_sa_table, content)
+
+    # The insert statement's execute call receives the records list
+    insert_call_args = mock_conn.execute.call_args_list
+    # The actual insert is the first (and only) execute call when there are no identity columns
+    records = insert_call_args[0][0][1]  # second positional arg to execute()
+
+    for record in records:
+        for value in record.values():
+            # No NaN or NaT values should remain - they must be None
+            if value is not None:
+                assert not (isinstance(value, float) and np.isnan(value)), f"Found float NaN in records: {record}"
+                assert value is not pd.NaT, f"Found NaT in records: {record}"

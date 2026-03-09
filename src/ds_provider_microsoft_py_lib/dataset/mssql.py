@@ -327,13 +327,17 @@ class MsSqlTable(
         """
 
         try:
-            # DROP TABLE IF EXISTS ensures idempotency.
-            # Use square brackets for MSSQL identifier escaping to handle
-            # special characters (e.g. periods) in schema/table names.
-            query = f"DROP TABLE IF EXISTS [{self.settings.schema}].[{self.settings.table}];"
-            logger.debug(f"Dropping table: {self.settings.schema}.{self.settings.table}")
-
             with self.linked_service.connection.begin() as conn:
+                if not inspect(conn).has_table(self.settings.table, schema=self.settings.schema):
+                    logger.debug(
+                        "Table %s.%s does not exist; purge is a no-op.",
+                        self.settings.schema,
+                        self.settings.table,
+                    )
+                    return
+
+                query = f"DROP TABLE IF EXISTS [{self.settings.schema}].[{self.settings.table}];"
+                logger.debug(f"Dropping table: {self.settings.schema}.{self.settings.table}")
                 conn.execute(text(query))
 
             logger.info(f"Successfully purged table: {self.settings.schema}.{self.settings.table}")

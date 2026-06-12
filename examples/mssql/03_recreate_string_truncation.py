@@ -16,7 +16,7 @@ import uuid
 import pandas as pd
 from ds_resource_plugin_py_lib.common.resource.dataset.errors import CreateError
 
-from ds_provider_microsoft_py_lib.dataset.mssql import CreateSettings, MsSqlTable, MsSqlTableDatasetSettings
+from ds_provider_microsoft_py_lib.dataset.mssql import CreateSettings, MsSqlTable, MsSqlTableDatasetSettings, PurgeSettings
 from ds_provider_microsoft_py_lib.linked_service.mssql import MsSqlLinkedService, MsSqlLinkedServiceSettings
 
 linked_service = MsSqlLinkedService(
@@ -43,6 +43,7 @@ dataset = MsSqlTable(
             primary_key=True,
             primary_key_columns=["id"],
         ),
+        purge=PurgeSettings(drop_table=True),
     ),
     id=uuid.uuid4(),
     name="testmssqlstringtruncation",

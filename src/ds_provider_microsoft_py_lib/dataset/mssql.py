@@ -56,6 +56,9 @@ from sqlalchemy import (
     select,
     text,
 )
+from sqlalchemy import (
+    delete as sa_delete,
+)
 from sqlalchemy.dialects.mssql import DATETIME2, NVARCHAR
 from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.inspection import inspect
@@ -131,6 +134,16 @@ class CreateSettings(Serializable):
 
 
 @dataclass(kw_only=True)
+class PurgeSettings(Serializable):
+    """
+    Settings specific to the purge() operation.
+    """
+
+    drop_table: bool = False
+    """Drop the table object instead of deleting rows."""
+
+
+@dataclass(kw_only=True)
 class MsSqlTableDatasetSettings(DatasetSettings):
     table: str
     """Table name for dataset operations."""
@@ -143,6 +156,9 @@ class MsSqlTableDatasetSettings(DatasetSettings):
 
     create: CreateSettings = field(default_factory=CreateSettings)
     """Settings for create()."""
+
+    purge: PurgeSettings = field(default_factory=PurgeSettings)
+    """Settings for purge()."""
 
 
 MsSqlTableDatasetSettingsType = TypeVar(
@@ -311,11 +327,12 @@ class MsSqlTable(
 
     def purge(self, **_kwargs: Any) -> None:
         """
-        Remove all content from the target table.
+        Purge table contents or drop the table.
 
-        Drops the entire table, leaving the structure empty. Per contract,
-        the target is empty after purge() returns. This is idempotent --
-        purging an already-empty (or non-existent) table is a no-op.
+        By default, deletes all rows while preserving the table definition.
+        When ``settings.purge.drop_table`` is enabled, drops the table object.
+        Per contract, this is idempotent -- purging an already-empty
+        or non-existent target is a no-op.
 
         Args:
             _kwargs: Additional keyword arguments (ignored).
@@ -324,20 +341,29 @@ class MsSqlTable(
             ConnectionError: If the connection is not established.
             PurgeError: If the purge operation fails.
         """
-
+        logger.debug("Starting purge operation for %s.%s", self.settings.schema, self.settings.table)
+        logger.debug("Purge settings: drop_table=%s", self.settings.purge.drop_table)
         try:
             with self.linked_service.connection.begin() as conn:
-                if not inspect(conn).has_table(self.settings.table, schema=self.settings.schema):
-                    logger.debug(
-                        "Table %s.%s does not exist; purge is a no-op.",
-                        self.settings.schema,
-                        self.settings.table,
-                    )
-                    return
+                if self.settings.purge.drop_table:
+                    safe_schema = self._quote_identifier(self.settings.schema)
+                    safe_table = self._quote_identifier(self.settings.table)
+                    query = f"DROP TABLE IF EXISTS {safe_schema}.{safe_table};"
+                    logger.debug("Dropping table: %s.%s", self.settings.schema, self.settings.table)
+                    conn.execute(text(query))
+                else:
+                    logger.debug("Deleting all rows from %s.%s", self.settings.schema, self.settings.table)
+                    inspector = inspect(self.linked_service.connection)
+                    if not inspector.has_table(self.settings.table, schema=self.settings.schema):
+                        logger.debug(
+                            "Table %s.%s does not exist; nothing to purge.",
+                            self.settings.schema,
+                            self.settings.table,
+                        )
+                        return
 
-                query = f"DROP TABLE IF EXISTS [{self.settings.schema}].[{self.settings.table}];"
-                logger.debug(f"Dropping table: {self.settings.schema}.{self.settings.table}")
-                conn.execute(text(query))
+                    table = self._get_table()
+                    conn.execute(sa_delete(table))
 
             logger.info(f"Successfully purged table: {self.settings.schema}.{self.settings.table}")
         except Exception as exc:
@@ -348,6 +374,7 @@ class MsSqlTable(
                 details={
                     "table": self.settings.table,
                     "schema": self.settings.schema,
+                    "drop_table": self.settings.purge.drop_table,
                 },
             ) from exc
 

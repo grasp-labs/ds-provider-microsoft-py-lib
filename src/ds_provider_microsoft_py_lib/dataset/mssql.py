@@ -91,7 +91,19 @@ def _format_exception(exc: Exception) -> str:
     payloads. Keeping this bounded prevents large clone batches from being
     copied into logs or API error messages.
     """
-    return _truncate_text(exc)
+    orig = getattr(exc, "orig", None)
+    if orig is not None:
+        pgerror = getattr(orig, "pgerror", None)
+        if isinstance(pgerror, str) and pgerror.strip():
+            return _truncate_text(pgerror.strip())
+        if orig.args:
+            return _truncate_text(orig.args[0])
+
+    message = str(exc)
+    if "[SQL:" in message:
+        message = message.split("[SQL:", 1)[0].strip()
+
+    return _truncate_text(message)
 
 
 @dataclass(kw_only=True)

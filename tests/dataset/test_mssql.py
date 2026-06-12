@@ -347,12 +347,40 @@ def test_create_error_truncates_large_sqlalchemy_exception_text(
         with pytest.raises(CreateError) as exc_info:
             table.create()
 
-    assert len(exc_info.value.message) < 2100
+    assert len(exc_info.value.message) < 900
     assert "truncated" in exc_info.value.message
     assert "x" * 3000 not in exc_info.value.message
     logged_message = mock_logger.error.call_args_list[-1].args[1]
-    assert len(logged_message) <= 2000
+    assert len(logged_message) <= 800
     assert "x" * 3000 not in logged_message
+
+
+def test_create_error_removes_sqlalchemy_sql_payload(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """CreateError must strip SQLAlchemy's rendered SQL/parameter section."""
+    table = make_table(settings, linked_service)
+    table.input = pd.DataFrame({"id": [1], "description": ["x" * 10]})
+    exception_text = "driver failed before SQL [SQL: INSERT INTO table VALUES ('secret')] [parameters: ('secret',)]"
+
+    mock_conn = MagicMock()
+    mock_begin = MagicMock()
+    mock_begin.__enter__ = MagicMock(return_value=mock_conn)
+    mock_begin.__exit__ = MagicMock(return_value=None)
+    linked_service.connection.begin = MagicMock(return_value=mock_begin)
+
+    with (
+        patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect") as mock_inspect,
+        patch.object(table, "_get_table", return_value=MagicMock()),
+        patch.object(table, "_copy_into_table", side_effect=RuntimeError(exception_text)),
+        pytest.raises(CreateError) as exc_info,
+    ):
+        mock_inspector = MagicMock()
+        mock_inspector.has_table = MagicMock(return_value=True)
+        mock_inspect.return_value = mock_inspector
+        table.create()
+
+    assert "driver failed before SQL" in exc_info.value.message
+    assert "INSERT INTO" not in exc_info.value.message
+    assert "parameters" not in exc_info.value.message
 
 
 # Test read error on non-existent table

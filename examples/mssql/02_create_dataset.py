@@ -29,6 +29,7 @@ from ds_provider_microsoft_py_lib.dataset.mssql import (
     MsSqlTable,
     CreateSettings,
     ReadSettings,
+    PurgeSettings,
 )
 from ds_provider_microsoft_py_lib.linked_service.mssql import MsSqlLinkedService, MsSqlLinkedServiceSettings
 
@@ -61,6 +62,7 @@ dataset = MsSqlTable(
             filters={"active": True},
             order_by=[("score", "desc"), "id"],
         ),
+        purge=PurgeSettings(drop_table=True),
     ),
     id=uuid.uuid4(),
     name="testmssqldataset",

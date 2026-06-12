@@ -361,6 +361,17 @@ class TestCreateEngineMethod:
 
         assert engine is engine_mock
 
+    def test_create_engine_hides_sqlalchemy_parameters(self, settings: MsSqlLinkedServiceSettings) -> None:
+        """_create_engine() must hide SQLAlchemy statement parameters in DBAPI errors."""
+        service = make_service(settings)
+        engine_mock = MagicMock()
+
+        with patch("ds_provider_microsoft_py_lib.linked_service.mssql.create_engine", return_value=engine_mock) as mock_create:
+            service._create_engine()
+
+        mock_create.assert_called_once()
+        assert mock_create.call_args.kwargs["hide_parameters"] is True
+
     def test_create_engine_raises_connection_error_on_argument_error(self, settings: MsSqlLinkedServiceSettings) -> None:
         """_create_engine() must wrap ArgumentError in ConnectionError."""
         service = make_service(settings)

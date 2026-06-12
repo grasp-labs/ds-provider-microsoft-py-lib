@@ -24,6 +24,7 @@ from ds_provider_microsoft_py_lib.dataset.mssql import (
     CreateSettings,
     MsSqlTable,
     MsSqlTableDatasetSettings,
+    PurgeSettings,
     ReadSettings,
 )
 from ds_provider_microsoft_py_lib.enums import ResourceType
@@ -51,6 +52,10 @@ def make_table(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -
     table.output = None  # type: ignore
     table.schema = {}
     return table
+
+
+def make_sql_table(name: str = "mytable") -> SQLTable:
+    return SQLTable(name, MetaData(), Column("id", Integer))
 
 
 # Test empty input handling
@@ -100,7 +105,11 @@ def test_purge_raises_purge_error(settings: MsSqlTableDatasetSettings, linked_se
     linked_service.connection.begin = MagicMock(return_value=mock_conn_ctx)
     mock_inspector = MagicMock()
     mock_inspector.has_table.return_value = True
-    with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector), pytest.raises(PurgeError):
+    with (
+        patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector),
+        patch.object(table, "_get_table", return_value=make_sql_table()),
+        pytest.raises(PurgeError),
+    ):
         table.purge()
 
 
@@ -136,7 +145,10 @@ def test_purge_is_idempotent(settings: MsSqlTableDatasetSettings, linked_service
     linked_service.connection.begin = MagicMock(return_value=mock_conn_ctx)
     mock_inspector = MagicMock()
     mock_inspector.has_table.return_value = True
-    with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector):
+    with (
+        patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector),
+        patch.object(table, "_get_table", return_value=make_sql_table()),
+    ):
         table.purge()
         table.purge()
 
@@ -179,7 +191,10 @@ def test_purge_does_not_populate_output(settings: MsSqlTableDatasetSettings, lin
     linked_service.connection.begin = MagicMock(return_value=mock_conn_ctx)
     mock_inspector = MagicMock()
     mock_inspector.has_table.return_value = True
-    with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector):
+    with (
+        patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector),
+        patch.object(table, "_get_table", return_value=make_sql_table()),
+    ):
         table.purge()
     assert table.output is None
 
@@ -303,6 +318,69 @@ def test_create_raises_create_error_on_write_failure(settings: MsSqlTableDataset
 
         with pytest.raises(CreateError):
             table.create()
+
+
+def test_create_error_truncates_large_sqlalchemy_exception_text(
+    settings: MsSqlTableDatasetSettings, linked_service: MagicMock
+) -> None:
+    """CreateError and logs must not include unbounded SQL/parameter payloads."""
+    table = make_table(settings, linked_service)
+    table.input = pd.DataFrame({"id": [1], "description": ["x" * 10]})
+    long_exception_text = "INSERT INTO table VALUES " + ("x" * 5000)
+
+    mock_conn = MagicMock()
+    mock_begin = MagicMock()
+    mock_begin.__enter__ = MagicMock(return_value=mock_conn)
+    mock_begin.__exit__ = MagicMock(return_value=None)
+    linked_service.connection.begin = MagicMock(return_value=mock_begin)
+
+    with (
+        patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect") as mock_inspect,
+        patch.object(table, "_get_table", return_value=MagicMock()),
+        patch.object(table, "_copy_into_table", side_effect=RuntimeError(long_exception_text)),
+        patch("ds_provider_microsoft_py_lib.dataset.mssql.logger") as mock_logger,
+    ):
+        mock_inspector = MagicMock()
+        mock_inspector.has_table = MagicMock(return_value=True)
+        mock_inspect.return_value = mock_inspector
+
+        with pytest.raises(CreateError) as exc_info:
+            table.create()
+
+    assert len(exc_info.value.message) < 900
+    assert "truncated" in exc_info.value.message
+    assert "x" * 3000 not in exc_info.value.message
+    logged_message = mock_logger.error.call_args_list[-1].args[1]
+    assert len(logged_message) <= 800
+    assert "x" * 3000 not in logged_message
+
+
+def test_create_error_removes_sqlalchemy_sql_payload(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """CreateError must strip SQLAlchemy's rendered SQL/parameter section."""
+    table = make_table(settings, linked_service)
+    table.input = pd.DataFrame({"id": [1], "description": ["x" * 10]})
+    exception_text = "driver failed before SQL [SQL: INSERT INTO table VALUES ('secret')] [parameters: ('secret',)]"
+
+    mock_conn = MagicMock()
+    mock_begin = MagicMock()
+    mock_begin.__enter__ = MagicMock(return_value=mock_conn)
+    mock_begin.__exit__ = MagicMock(return_value=None)
+    linked_service.connection.begin = MagicMock(return_value=mock_begin)
+
+    with (
+        patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect") as mock_inspect,
+        patch.object(table, "_get_table", return_value=MagicMock()),
+        patch.object(table, "_copy_into_table", side_effect=RuntimeError(exception_text)),
+        pytest.raises(CreateError) as exc_info,
+    ):
+        mock_inspector = MagicMock()
+        mock_inspector.has_table = MagicMock(return_value=True)
+        mock_inspect.return_value = mock_inspector
+        table.create()
+
+    assert "driver failed before SQL" in exc_info.value.message
+    assert "INSERT INTO" not in exc_info.value.message
+    assert "parameters" not in exc_info.value.message
 
 
 # Test read error on non-existent table
@@ -555,8 +633,8 @@ def test_list_creates_dataframe_with_correct_structure(settings: MsSqlTableDatas
     assert len(table.output) == 2
 
 
-def test_purge_with_quoted_table_name(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
-    """Test purge operation with success."""
+def test_purge_deletes_rows_by_default(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
+    """Test purge operation deletes rows by default."""
     table = make_table(settings, linked_service)
     mock_conn = MagicMock()
     mock_conn_ctx = MagicMock()
@@ -565,11 +643,16 @@ def test_purge_with_quoted_table_name(settings: MsSqlTableDatasetSettings, linke
     linked_service.connection.begin = MagicMock(return_value=mock_conn_ctx)
     mock_inspector = MagicMock()
     mock_inspector.has_table.return_value = True
-    with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector):
+    sql_table = make_sql_table()
+    with (
+        patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector),
+        patch.object(table, "_get_table", return_value=sql_table),
+    ):
         table.purge()
 
-    # Verify execute was called (meaning the SQL was prepared and executed)
     mock_conn.execute.assert_called_once()
+    executed_statement = mock_conn.execute.call_args[0][0]
+    assert str(executed_statement) == "DELETE FROM mytable"
 
 
 def test_build_filters_with_no_filters(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
@@ -968,22 +1051,18 @@ def test_list_populates_all_required_columns(settings: MsSqlTableDatasetSettings
 
 def test_purge_executes_drop_table_statement(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     """Test that purge executes DROP TABLE statement."""
+    settings.purge = PurgeSettings(drop_table=True)
     table = make_table(settings, linked_service)
     mock_conn = MagicMock()
     mock_conn_ctx = MagicMock()
     mock_conn_ctx.__enter__ = MagicMock(return_value=mock_conn)
     mock_conn_ctx.__exit__ = MagicMock(return_value=None)
     linked_service.connection.begin = MagicMock(return_value=mock_conn_ctx)
-    mock_inspector = MagicMock()
-    mock_inspector.has_table.return_value = True
-    with patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect", return_value=mock_inspector):
-        table.purge()
+    table.purge()
 
-    # Verify that a SQL statement was executed
     mock_conn.execute.assert_called_once()
-    # The call should contain DROP TABLE logic
-    executed_statement = mock_conn.execute.call_args
-    assert executed_statement is not None
+    executed_sql = str(mock_conn.execute.call_args[0][0])
+    assert executed_sql == "DROP TABLE IF EXISTS [myschema].[mytable];"
 
 
 def test_get_details_includes_all_settings_properties(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
@@ -1811,6 +1890,7 @@ def test_purge_uses_square_bracket_quoting_for_special_chars_in_table_name(linke
     special_settings = MsSqlTableDatasetSettings(
         table="objectValuesExcludeZeroLite_1.0",
         schema="dbo",
+        purge=PurgeSettings(drop_table=True),
     )
     table = make_table(special_settings, linked_service)
 

@@ -47,7 +47,6 @@ from sqlalchemy import (
     Float,
     Integer,
     MetaData,
-    String,
     Table,
     and_,
     asc,
@@ -57,7 +56,10 @@ from sqlalchemy import (
     select,
     text,
 )
-from sqlalchemy.dialects.mssql import DATETIME2
+from sqlalchemy import (
+    delete as sa_delete,
+)
+from sqlalchemy.dialects.mssql import DATETIME2, NVARCHAR
 from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.inspection import inspect
 from sqlalchemy.sql import Select
@@ -66,6 +68,42 @@ from ..enums import ResourceType
 from ..linked_service.mssql import MsSqlLinkedService
 
 logger = Logger.get_logger(__name__, package=True)
+
+MAX_ERROR_MESSAGE_LENGTH = 800
+TRUNCATION_SUFFIX = "... [truncated]"
+
+
+def _truncate_text(value: Any, max_length: int = MAX_ERROR_MESSAGE_LENGTH) -> str:
+    """
+    Convert a value to text and cap its length for logs and error responses.
+    """
+    text_value = str(value)
+    if len(text_value) <= max_length:
+        return text_value
+    return f"{text_value[: max_length - len(TRUNCATION_SUFFIX)]}{TRUNCATION_SUFFIX}"
+
+
+def _format_exception(exc: Exception) -> str:
+    """
+    Return a bounded exception string.
+
+    SQLAlchemy DBAPI exceptions can include full statements and parameter
+    payloads. Keeping this bounded prevents large clone batches from being
+    copied into logs or API error messages.
+    """
+    orig = getattr(exc, "orig", None)
+    if orig is not None:
+        pgerror = getattr(orig, "pgerror", None)
+        if isinstance(pgerror, str) and pgerror.strip():
+            return _truncate_text(pgerror.strip())
+        if orig.args:
+            return _truncate_text(orig.args[0])
+
+    message = str(exc)
+    if "[SQL:" in message:
+        message = message.split("[SQL:", 1)[0].strip()
+
+    return _truncate_text(message)
 
 
 @dataclass(kw_only=True)
@@ -132,6 +170,16 @@ class CreateSettings(Serializable):
 
 
 @dataclass(kw_only=True)
+class PurgeSettings(Serializable):
+    """
+    Settings specific to the purge() operation.
+    """
+
+    drop_table: bool = False
+    """Drop the table object instead of deleting rows."""
+
+
+@dataclass(kw_only=True)
 class MsSqlTableDatasetSettings(DatasetSettings):
     table: str
     """Table name for dataset operations."""
@@ -144,6 +192,9 @@ class MsSqlTableDatasetSettings(DatasetSettings):
 
     create: CreateSettings = field(default_factory=CreateSettings)
     """Settings for create()."""
+
+    purge: PurgeSettings = field(default_factory=PurgeSettings)
+    """Settings for purge()."""
 
 
 MsSqlTableDatasetSettingsType = TypeVar(
@@ -233,9 +284,10 @@ class MsSqlTable(
                 details={**(exc.details or {}), "settings": self.settings.create.serialize()},
             ) from exc
         except Exception as exc:
-            logger.error("Create failed: %s", exc)
+            error_message = _format_exception(exc)
+            logger.error("Create failed: %s", error_message)
             raise CreateError(
-                message=f"Failed to write data to table: {exc!s}",
+                message=f"Failed to write data to table: {error_message}",
                 status_code=500,
                 details={
                     "table": self.settings.table,
@@ -269,7 +321,7 @@ class MsSqlTable(
             if self.settings.read.limit is not None:
                 stmt = stmt.limit(self.settings.read.limit)
 
-            logger.debug("Executing query: %s", stmt)
+            logger.debug("Executing query: %s", _truncate_text(stmt))
             with self.linked_service.connection.connect() as conn:
                 rows = conn.execute(stmt).mappings().all()
             self.output = pd.DataFrame.from_records(rows)  # type: ignore[type-var]
@@ -298,25 +350,27 @@ class MsSqlTable(
                 details=details,
             ) from exc
         except Exception as exc:
-            logger.error("Failed to read data from table: %s", exc)
+            error_message = _format_exception(exc)
+            logger.error("Failed to read data from table: %s", error_message)
             raise ReadError(
-                message=f"Failed to read data from table: {exc!s}",
+                message=f"Failed to read data from table: {error_message}",
                 status_code=500,
                 details={
                     "table": self.settings.table,
                     "schema": self.settings.schema,
-                    "query": str(stmt) if stmt is not None else None,
+                    "query": _truncate_text(stmt) if stmt is not None else None,
                     "settings": self.settings.read.serialize(),
                 },
             ) from exc
 
     def purge(self, **_kwargs: Any) -> None:
         """
-        Remove all content from the target table.
+        Purge table contents or drop the table.
 
-        Drops the entire table, leaving the structure empty. Per contract,
-        the target is empty after purge() returns. This is idempotent --
-        purging an already-empty (or non-existent) table is a no-op.
+        By default, deletes all rows while preserving the table definition.
+        When ``settings.purge.drop_table`` is enabled, drops the table object.
+        Per contract, this is idempotent -- purging an already-empty
+        or non-existent target is a no-op.
 
         Args:
             _kwargs: Additional keyword arguments (ignored).
@@ -325,30 +379,41 @@ class MsSqlTable(
             ConnectionError: If the connection is not established.
             PurgeError: If the purge operation fails.
         """
-
+        logger.debug("Starting purge operation for %s.%s", self.settings.schema, self.settings.table)
+        logger.debug("Purge settings: drop_table=%s", self.settings.purge.drop_table)
         try:
             with self.linked_service.connection.begin() as conn:
-                if not inspect(conn).has_table(self.settings.table, schema=self.settings.schema):
-                    logger.debug(
-                        "Table %s.%s does not exist; purge is a no-op.",
-                        self.settings.schema,
-                        self.settings.table,
-                    )
-                    return
+                if self.settings.purge.drop_table:
+                    safe_schema = self._quote_identifier(self.settings.schema)
+                    safe_table = self._quote_identifier(self.settings.table)
+                    query = f"DROP TABLE IF EXISTS {safe_schema}.{safe_table};"
+                    logger.debug("Dropping table: %s.%s", self.settings.schema, self.settings.table)
+                    conn.execute(text(query))
+                else:
+                    logger.debug("Deleting all rows from %s.%s", self.settings.schema, self.settings.table)
+                    inspector = inspect(self.linked_service.connection)
+                    if not inspector.has_table(self.settings.table, schema=self.settings.schema):
+                        logger.debug(
+                            "Table %s.%s does not exist; nothing to purge.",
+                            self.settings.schema,
+                            self.settings.table,
+                        )
+                        return
 
-                query = f"DROP TABLE IF EXISTS [{self.settings.schema}].[{self.settings.table}];"
-                logger.debug(f"Dropping table: {self.settings.schema}.{self.settings.table}")
-                conn.execute(text(query))
+                    table = self._get_table()
+                    conn.execute(sa_delete(table))
 
             logger.info(f"Successfully purged table: {self.settings.schema}.{self.settings.table}")
         except Exception as exc:
-            logger.error(f"Failed to purge table: {exc}", exc_info=True)
+            error_message = _format_exception(exc)
+            logger.error("Failed to purge table: %s", error_message)
             raise PurgeError(
-                message=f"Failed to purge table '{self.settings.schema}.{self.settings.table}': {exc!s}",
+                message=f"Failed to purge table '{self.settings.schema}.{self.settings.table}': {error_message}",
                 status_code=500,
                 details={
                     "table": self.settings.table,
                     "schema": self.settings.schema,
+                    "drop_table": self.settings.purge.drop_table,
                 },
             ) from exc
 
@@ -403,9 +468,10 @@ class MsSqlTable(
             self.output = self.input.copy()
             logger.info(f"Successfully deleted {len(payloads)} rows from {self.settings.schema}.{self.settings.table}")
         except Exception as exc:
-            logger.error(f"Failed to delete rows from table: {exc}", exc_info=True)
+            error_message = _format_exception(exc)
+            logger.error("Failed to delete rows from table: %s", error_message)
             raise DeleteError(
-                message=f"Failed to delete rows from table '{self.settings.schema}.{self.settings.table}': {exc!s}",
+                message=f"Failed to delete rows from table '{self.settings.schema}.{self.settings.table}': {error_message}",
                 status_code=500,
                 details={
                     "table": self.settings.table,
@@ -509,9 +575,10 @@ class MsSqlTable(
             # Re-raise our own exception type
             raise
         except Exception as exc:
-            logger.error(f"Failed to list tables in schema: {exc}", exc_info=True)
+            error_message = _format_exception(exc)
+            logger.error("Failed to list tables in schema: %s", error_message)
             raise ListError(
-                message=f"Failed to list tables in schema '{self.settings.schema}': {exc!s}",
+                message=f"Failed to list tables in schema '{self.settings.schema}': {error_message}",
                 status_code=500,
                 details={"schema": self.settings.schema},
             ) from exc
@@ -580,9 +647,9 @@ class MsSqlTable(
             elif pd.api.types.is_datetime64_any_dtype(dtype):
                 dtype_map[col_name_str] = DATETIME2()  # type: ignore
             elif pd.api.types.is_string_dtype(dtype) or isinstance(dtype, pd.CategoricalDtype):
-                dtype_map[col_name_str] = String(length=255)
+                dtype_map[col_name_str] = NVARCHAR()
             else:
-                dtype_map[col_name_str] = String(length=255)
+                dtype_map[col_name_str] = NVARCHAR()
 
         return dtype_map
 

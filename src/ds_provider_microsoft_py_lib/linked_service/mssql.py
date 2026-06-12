@@ -190,7 +190,7 @@ class MsSqlLinkedService(LinkedService[MsSqlLinkedServiceSettingsType], Generic[
         try:
             conn_str = self._get_connection_string()
             url = f"mssql+pyodbc:///?odbc_connect={quote_plus(conn_str)}"
-            engine = create_engine(url, echo=False, fast_executemany=True)
+            engine = create_engine(url, echo=False, fast_executemany=True, hide_parameters=True)
             logger.debug("SQLAlchemy engine created successfully.")
             return engine
         except ArgumentError as exc:

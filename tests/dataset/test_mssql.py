@@ -320,6 +320,41 @@ def test_create_raises_create_error_on_write_failure(settings: MsSqlTableDataset
             table.create()
 
 
+def test_create_error_truncates_large_sqlalchemy_exception_text(
+    settings: MsSqlTableDatasetSettings, linked_service: MagicMock
+) -> None:
+    """CreateError and logs must not include unbounded SQL/parameter payloads."""
+    table = make_table(settings, linked_service)
+    table.input = pd.DataFrame({"id": [1], "description": ["x" * 10]})
+    long_exception_text = "INSERT INTO table VALUES " + ("x" * 5000)
+
+    mock_conn = MagicMock()
+    mock_begin = MagicMock()
+    mock_begin.__enter__ = MagicMock(return_value=mock_conn)
+    mock_begin.__exit__ = MagicMock(return_value=None)
+    linked_service.connection.begin = MagicMock(return_value=mock_begin)
+
+    with (
+        patch("ds_provider_microsoft_py_lib.dataset.mssql.inspect") as mock_inspect,
+        patch.object(table, "_get_table", return_value=MagicMock()),
+        patch.object(table, "_copy_into_table", side_effect=RuntimeError(long_exception_text)),
+        patch("ds_provider_microsoft_py_lib.dataset.mssql.logger") as mock_logger,
+    ):
+        mock_inspector = MagicMock()
+        mock_inspector.has_table = MagicMock(return_value=True)
+        mock_inspect.return_value = mock_inspector
+
+        with pytest.raises(CreateError) as exc_info:
+            table.create()
+
+    assert len(exc_info.value.message) < 2100
+    assert "truncated" in exc_info.value.message
+    assert "x" * 3000 not in exc_info.value.message
+    logged_message = mock_logger.error.call_args_list[-1].args[1]
+    assert len(logged_message) <= 2000
+    assert "x" * 3000 not in logged_message
+
+
 # Test read error on non-existent table
 def test_read_raises_read_error_on_missing_table(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
     table = make_table(settings, linked_service)

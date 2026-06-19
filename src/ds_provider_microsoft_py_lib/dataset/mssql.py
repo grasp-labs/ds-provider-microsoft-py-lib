@@ -259,14 +259,8 @@ class MsSqlTable(
 
         try:
             create_input = self.input.reset_index() if self.settings.create.index else self.input.copy()
-            logger.debug(
-                "Create input prepared with %d rows and columns=%s",
-                len(create_input),
-                list(create_input.columns),
-            )
             with self.linked_service.connection.begin() as conn:
                 table_exists = bool(inspect(conn).has_table(self.settings.table, schema=self.settings.schema))
-                logger.debug("Table exists=%s for %s.%s", table_exists, self.settings.schema, self.settings.table)
                 if table_exists:
                     table = self._get_table()
                 else:
@@ -275,7 +269,6 @@ class MsSqlTable(
                     table.create(bind=conn)
                 self._copy_into_table(conn, table, create_input)
             self.output = self.input.copy()
-            logger.debug("Create completed successfully. Rows written=%d", len(self.output))
         except ValidationError as exc:
             logger.error("Create validation failed: %s", exc.message)
             raise CreateError(
@@ -309,7 +302,6 @@ class MsSqlTable(
         Raises:
             ReadError: If reading data fails.
         """
-        logger.debug("Starting read operation for %s.%s", self.settings.schema, self.settings.table)
         stmt: Select[Any] | None = None
         try:
             self._validate_read_settings()

@@ -2,7 +2,7 @@
 Unit tests for MsSqlTable dataset implementation.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import numpy as np
 import pandas as pd
@@ -1602,8 +1602,47 @@ def test_create_wraps_validation_error_into_create_error(settings: MsSqlTableDat
 
 # Lines 285, 289-291 - read with limit applied + successful read path
 def test_read_with_limit_applies_limit(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
-    """read() must apply limit when set in read settings."""
-    settings.read = ReadSettings(limit=10)
+    """read() must page through results when auto_paginate is enabled."""
+    settings.read = ReadSettings(limit=10, auto_paginate=True)
+    table = make_table(settings, linked_service)
+
+    mock_sa_table = MagicMock()
+    mock_stmt = MagicMock()
+    mock_stmt.limit = MagicMock(return_value=mock_stmt)
+    mock_stmt.offset = MagicMock(return_value=mock_stmt)
+
+    mock_conn = MagicMock()
+    mock_conn_ctx = MagicMock()
+    mock_conn_ctx.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn_ctx.__exit__ = MagicMock(return_value=None)
+    linked_service.connection.connect = MagicMock(return_value=mock_conn_ctx)
+    first_page = MagicMock()
+    first_page.mappings.return_value.all.return_value = [{"id": i, "name": f"name-{i}"} for i in range(10)]
+    second_page = MagicMock()
+    second_page.mappings.return_value.all.return_value = [{"id": 10, "name": "name-10"}]
+    mock_conn.execute.side_effect = [first_page, second_page]
+
+    with (
+        patch.object(table, "_get_table", return_value=mock_sa_table),
+        patch.object(table, "_build_select_columns", return_value=mock_stmt),
+        patch.object(table, "_build_filters", return_value=mock_stmt),
+        patch.object(table, "_build_pagination_order_by", return_value=mock_stmt),
+    ):
+        table.read()
+
+    mock_stmt.limit.assert_has_calls([call(10), call(10)])
+    assert mock_stmt.limit.call_count == 2
+    assert mock_stmt.offset.call_args_list[0].args == (0,)
+    assert mock_stmt.offset.call_args_list[1].args == (10,)
+    assert table.output is not None
+    assert len(table.output) == 11
+
+
+def test_read_with_limit_without_paginate_uses_single_query(
+    settings: MsSqlTableDatasetSettings, linked_service: MagicMock
+) -> None:
+    """read() must keep the single-query path when auto_paginate is disabled."""
+    settings.read = ReadSettings(limit=10, auto_paginate=False)
     table = make_table(settings, linked_service)
 
     mock_sa_table = MagicMock()

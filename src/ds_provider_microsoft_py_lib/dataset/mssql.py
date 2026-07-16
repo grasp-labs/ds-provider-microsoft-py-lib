@@ -118,6 +118,9 @@ class ReadSettings(Serializable):
     limit: int | None = None
     """The limit of the data to read."""
 
+    auto_paginate: bool = False
+    """When True, `read()` advances `offset` and concatenates pages until exhausted."""
+
     columns: Sequence[str] | None = None
     """
     Specific columns to select. If None, selects all columns (*).
@@ -316,15 +319,19 @@ class MsSqlTable(
             table = self._get_table()
             stmt = self._build_select_columns(table)
             stmt = self._build_filters(stmt, table)
-            stmt = self._build_order_by(stmt, table)
+            if self.settings.read.limit is None or not self.settings.read.auto_paginate:
+                stmt = self._build_order_by(stmt, table)
+                if self.settings.read.limit is not None:
+                    stmt = stmt.limit(self.settings.read.limit)
+                logger.debug("Executing query: %s", _truncate_text(stmt))
+                with self.linked_service.connection.connect() as conn:
+                    rows = conn.execute(stmt).mappings().all()
+                self.output = pd.DataFrame.from_records(rows)  # type: ignore[type-var]
+                logger.debug("Read completed successfully. Rows read=%d", len(self.output))
+                return
 
-            if self.settings.read.limit is not None:
-                stmt = stmt.limit(self.settings.read.limit)
-
-            logger.debug("Executing query: %s", _truncate_text(stmt))
-            with self.linked_service.connection.connect() as conn:
-                rows = conn.execute(stmt).mappings().all()
-            self.output = pd.DataFrame.from_records(rows)  # type: ignore[type-var]
+            stmt = self._build_pagination_order_by(stmt, table)
+            self.output = self._read_paginated(stmt)
             logger.debug("Read completed successfully. Rows read=%d", len(self.output))
         except NoSuchTableError as exc:
             logger.error(
@@ -780,6 +787,21 @@ class MsSqlTable(
 
         return stmt.order_by(*order_clauses)
 
+    def _build_pagination_order_by(self, stmt: Select[Any], table: Table) -> Select[Any]:
+        """
+        Apply a deterministic ORDER BY for paginated reads.
+
+        Uses explicit read settings when present, otherwise falls back to the
+        reflected primary key columns or, as a last resort, all table columns.
+        This keeps OFFSET/LIMIT paging stable enough for full-load reads.
+        """
+        if self.settings.read.order_by:
+            return self._build_order_by(stmt, table)
+
+        order_columns = [col.name for col in table.primary_key.columns] or list(table.c.keys())
+        self._validate_columns(table, order_columns)
+        return stmt.order_by(*[asc(table.c[col_name]) for col_name in order_columns])
+
     def _quote_identifier(self, name: str) -> str:
         """
         Quote identifiers safely for SQL Server using SQLAlchemy's identifier preparer.
@@ -1033,6 +1055,43 @@ class MsSqlTable(
         if input_value is None:
             return pd.DataFrame()
         return cast("pd.DataFrame", input_value.copy())
+
+    def _read_paginated(self, stmt: Select[Any]) -> pd.DataFrame:
+        """
+        Read all pages for a limit-based query.
+
+        The configured limit becomes the page size. We keep advancing the offset
+        until the page returns fewer rows than requested.
+        """
+        page_size = self.settings.read.limit
+        if page_size is None:
+            raise ValidationError(
+                message="Read limit must be set for paginated reads.",
+                status_code=400,
+                details={
+                    "table": self.settings.table,
+                    "schema": self.settings.schema,
+                },
+            )
+
+        frames: list[pd.DataFrame] = []
+        offset = 0
+        with self.linked_service.connection.connect() as conn:
+            while True:
+                page_stmt = stmt.limit(page_size).offset(offset)
+                logger.debug("Executing paginated query: %s", _truncate_text(page_stmt))
+                rows = conn.execute(page_stmt).mappings().all()
+                frame = pd.DataFrame.from_records(rows)  # type: ignore[type-var]
+                if frame.empty:
+                    break
+                frames.append(frame)
+                if len(frame) < page_size:
+                    break
+                offset += page_size
+
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
 
     def _validate_read_settings(self) -> None:
         """

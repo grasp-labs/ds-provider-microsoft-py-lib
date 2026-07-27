@@ -118,7 +118,7 @@ class ReadSettings(Serializable):
     limit: int | None = None
     """The limit of the data to read."""
 
-    auto_paginate: bool = False
+    full_load: bool = False
     """When True, `read()` advances `offset` and concatenates pages until exhausted."""
 
     columns: Sequence[str] | None = None
@@ -319,7 +319,7 @@ class MsSqlTable(
             table = self._get_table()
             stmt = self._build_select_columns(table)
             stmt = self._build_filters(stmt, table)
-            if self.settings.read.limit is None or not self.settings.read.auto_paginate:
+            if self.settings.read.limit is None or not self.settings.read.full_load:
                 stmt = self._build_order_by(stmt, table)
                 if self.settings.read.limit is not None:
                     stmt = stmt.limit(self.settings.read.limit)

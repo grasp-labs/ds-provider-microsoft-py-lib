@@ -1602,8 +1602,8 @@ def test_create_wraps_validation_error_into_create_error(settings: MsSqlTableDat
 
 # Lines 285, 289-291 - read with limit applied + successful read path
 def test_read_with_limit_applies_limit(settings: MsSqlTableDatasetSettings, linked_service: MagicMock) -> None:
-    """read() must page through results when auto_paginate is enabled."""
-    settings.read = ReadSettings(limit=10, auto_paginate=True)
+    """read() must page through results when full_load is enabled."""
+    settings.read = ReadSettings(limit=10, full_load=True)
     table = make_table(settings, linked_service)
 
     mock_sa_table = MagicMock()
@@ -1641,8 +1641,8 @@ def test_read_with_limit_applies_limit(settings: MsSqlTableDatasetSettings, link
 def test_read_with_limit_without_paginate_uses_single_query(
     settings: MsSqlTableDatasetSettings, linked_service: MagicMock
 ) -> None:
-    """read() must keep the single-query path when auto_paginate is disabled."""
-    settings.read = ReadSettings(limit=10, auto_paginate=False)
+    """read() must keep the single-query path when full_load is disabled."""
+    settings.read = ReadSettings(limit=10, full_load=False)
     table = make_table(settings, linked_service)
 
     mock_sa_table = MagicMock()

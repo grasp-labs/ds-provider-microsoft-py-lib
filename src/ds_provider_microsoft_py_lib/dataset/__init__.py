@@ -21,9 +21,12 @@ Example:
 >>> dataset.read()
 """
 
+from .mail import MailMessage, MailMessageDatasetSettings
 from .mssql import MsSqlTable, MsSqlTableDatasetSettings
 
 __all__ = [
+    "MailMessage",
+    "MailMessageDatasetSettings",
     "MsSqlTable",
     "MsSqlTableDatasetSettings",
 ]

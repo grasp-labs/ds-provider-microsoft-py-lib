@@ -20,9 +20,12 @@ Example:
 >>> linked_service.connect()
 """
 
+from .mail import MailLinkedService, MailLinkedServiceSettings
 from .mssql import MsSqlLinkedService, MsSqlLinkedServiceSettings
 
 __all__ = [
+    "MailLinkedService",
+    "MailLinkedServiceSettings",
     "MsSqlLinkedService",
     "MsSqlLinkedServiceSettings",
 ]

@@ -8,6 +8,11 @@ linked_service:
     version: 1.0.0
     description: Microsoft SQL Server linked service
     class_name: ds_provider_microsoft_py_lib.linked_service.MsSqlLinkedService
+  - name: Microsoft_Mail_LinkedService
+    type: ds.resource.linked_service.microsoft-mail
+    version: 1.0.0
+    description: Microsoft Graph mail linked service
+    class_name: ds_provider_microsoft_py_lib.linked_service.MailLinkedService
 
 dataset:
   - name: Microsoft_SQL_Dataset
@@ -15,3 +20,8 @@ dataset:
     version: 1.0.0
     description: Microsoft SQL Server dataset
     class_name: ds_provider_microsoft_py_lib.dataset.MsSqlTable
+  - name: Microsoft_Mail_Dataset
+    type: ds.resource.dataset.microsoft-mail
+    version: 1.0.0
+    description: Microsoft Graph mail message dataset
+    class_name: ds_provider_microsoft_py_lib.dataset.MailMessage

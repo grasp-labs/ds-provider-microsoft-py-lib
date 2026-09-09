@@ -9,6 +9,10 @@ Example:
     'ds.resource.linked_service.microsoft-sql'
     >>> ResourceType.MICROSOFT_SQL_DATASET
     'ds.resource.dataset.microsoft-sql'
+    >>> ResourceType.MICROSOFT_MAIL_LINKED_SERVICE
+    'ds.resource.linked_service.microsoft-mail'
+    >>> ResourceType.MICROSOFT_MAIL_DATASET
+    'ds.resource.dataset.microsoft-mail'
 """
 
 from enum import StrEnum
@@ -21,3 +25,5 @@ class ResourceType(StrEnum):
 
     MICROSOFT_SQL_LINKED_SERVICE = "ds.resource.linked_service.microsoft-sql"
     MICROSOFT_SQL_DATASET = "ds.resource.dataset.microsoft-sql"
+    MICROSOFT_MAIL_LINKED_SERVICE = "ds.resource.linked_service.microsoft-mail"
+    MICROSOFT_MAIL_DATASET = "ds.resource.dataset.microsoft-mail"

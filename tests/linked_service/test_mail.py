@@ -215,6 +215,23 @@ class TestConnectMethod:
         with pytest.raises(AuthenticationError):
             service.connect()
 
+    def test_connect_is_idempotent(self, settings: MailLinkedServiceSettings) -> None:
+        """connect() must be idempotent - calling twice must not leak the existing session."""
+        service = make_service(settings)
+        credential_mock = MagicMock()
+
+        with (
+            patch.object(service, "get_credential", return_value=credential_mock) as get_credential_mock,
+            patch.object(service, "get_access_token", return_value="token") as get_token_mock,
+        ):
+            service.connect()
+            first_session = service._session
+            service.connect()
+
+        assert service._session is first_session
+        get_credential_mock.assert_called_once()
+        get_token_mock.assert_called_once()
+
 
 class TestTestConnectionMethod:
     def test_test_connection_success_when_not_connected(self, settings: MailLinkedServiceSettings) -> None:

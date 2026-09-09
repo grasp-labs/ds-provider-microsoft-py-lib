@@ -193,9 +193,16 @@ class MailLinkedService(LinkedService[MailLinkedServiceSettingsType], Generic[Ma
         """
         Connect to Microsoft Graph, verifying credentials can mint an access token.
 
+        Idempotent: calling connect() on an already-connected service reuses
+        the existing session rather than leaking it.
+
         Returns:
             None
         """
+        if self._session is not None:
+            logger.debug("Connection to Microsoft Graph already established, reusing.")
+            return
+
         self.check_settings_is_set()
         self._credential = self.get_credential()
         self.get_access_token()

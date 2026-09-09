@@ -10,12 +10,13 @@ This example demonstrates how to:
 - Create an instance of `MailMessage` using the settings, a linked service, and additional
 metadata such as id, name, version, and description.
 - Connect to the linked service and read messages (with attachments expanded inline) into
-`dataset.output`, a pandas DataFrame with one row per message.
+`dataset.output`, a pandas DataFrame with one row per message. `read()` never mutates the
+mailbox and is idempotent.
 - Decode an attachment's base64 `content_bytes` back into raw file bytes.
-- Optionally mark the returned messages as read and move them to a "processed" folder --
-gated behind the `MAIL_ALLOW_MUTATIONS` environment variable since, unlike the mssql example's
-disposable docker database, this reads a real mailbox and these actions are not reversible
-from this script.
+- Optionally mark the messages as read and move them to a "processed" folder by assigning
+them to `dataset.input` and calling `update()` -- gated behind the `MAIL_ALLOW_MUTATIONS`
+environment variable since, unlike the mssql example's disposable docker database, this reads
+a real mailbox and these actions are not reversible from this script.
 
 Reads credentials and the mailbox to query from environment variables:
 - MAIL_TENANT_ID
@@ -77,7 +78,9 @@ for _, row in output.iterrows():
         content = base64.b64decode(attachment["content_bytes"])
         print(f"Attachment {attachment['name']!r} decoded to {len(content)} bytes ({attachment['content_type']}).")
 
-if allow_mutations:
+if allow_mutations and not output.empty:
+    dataset.input = output
+    dataset.update()
     print("MAIL_ALLOW_MUTATIONS=true: messages above were marked as read and moved to 'Processed'.")
 else:
     print("MAIL_ALLOW_MUTATIONS not set: messages were left untouched (read-only run).")

@@ -8,15 +8,17 @@ This module implements a dataset that reads messages (and their attachments)
 from a mailbox via the Microsoft Graph API. It is intended for mailboxes that
 receive inbound files from external clients as email attachments.
 
-Each read() call:
-    1. Lists messages in the configured folder matching the configured filter
-       (by default, unread messages only), expanding attachments inline.
-    2. Optionally marks the returned messages as read.
-    3. Optionally moves the returned messages to a "processed" folder.
+``read()`` only lists messages in the configured folder matching the
+configured filter (by default, unread messages only), expanding attachments
+inline. It does not mutate the mailbox and is idempotent, per the dataset
+contract.
 
-Both post-read actions require the app registration to hold the Graph
-application permission ``Mail.ReadWrite`` (with admin consent); read-only
-use only needs ``Mail.Read``.
+Marking messages as read and/or moving them to a "processed" folder are
+separate, explicit mutations performed by ``update()``: assign the messages
+to act on (e.g. ``mail.output`` from a prior ``read()``, or a subset of it)
+to ``mail.input`` and call ``update()``. Both actions require the app
+registration to hold the Graph application permission ``Mail.ReadWrite``
+(with admin consent); read-only use only needs ``Mail.Read``.
 
 Example:
     >>> mail = MailMessage(
@@ -46,6 +48,8 @@ Example:
     >>> mail.read()
     >>> messages = mail.output  # pandas DataFrame, one row per message
     >>> messages.iloc[0]["attachments"]  # list[dict] with base64 content_bytes
+    >>> mail.input = messages  # mark as read and move, per settings above
+    >>> mail.update()
 """
 
 from dataclasses import dataclass, field
@@ -88,9 +92,9 @@ class MailMessageDatasetSettings(DatasetSettings):
     include_attachments: bool = True
     """If True, file attachments are expanded inline as base64 content."""
     mark_as_read: bool = False
-    """If True, messages returned by read() are marked isRead=true afterwards. Requires Mail.ReadWrite."""
+    """If True, messages passed to update() via self.input are marked isRead=true. Requires Mail.ReadWrite."""
     move_to_processed_folder: str | None = None
-    """If set, messages returned by read() are moved to this folder (display name or id) afterwards.
+    """If set, messages passed to update() via self.input are moved to this folder (display name or id).
     Requires Mail.ReadWrite."""
 
 
@@ -241,11 +245,24 @@ class MailMessage(
             )
         return pd.DataFrame(rows)
 
+    @staticmethod
+    def _escape_odata_string_literal(value: str) -> str:
+        """
+        Escape a value for safe interpolation into an OData string literal.
+
+        Single quotes delimit OData string literals; a literal single quote
+        within the value must be doubled, per the OData URL conventions.
+
+        Returns:
+            str: The value with embedded single quotes doubled.
+        """
+        return value.replace("'", "''")
+
     def _mark_messages_as_read(self, message_ids: list[str]) -> None:
         session: requests.Session = self.linked_service.connection.session
         base_url = self.linked_service.connection.base_url
         for message_id in message_ids:
-            url = f"{base_url}users/{self._mailbox_segment}/messages/{message_id}"
+            url = f"{base_url}users/{self._mailbox_segment}/messages/{quote(message_id, safe='')}"
             try:
                 response = session.patch(
                     url,
@@ -271,7 +288,7 @@ class MailMessage(
             response = session.get(
                 url,
                 headers=self.linked_service.get_headers(),
-                params={"$filter": f"displayName eq '{display_name_or_id}'"},
+                params={"$filter": f"displayName eq '{self._escape_odata_string_literal(display_name_or_id)}'"},
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
             response.raise_for_status()
@@ -292,7 +309,7 @@ class MailMessage(
         session: requests.Session = self.linked_service.connection.session
         base_url = self.linked_service.connection.base_url
         for message_id in message_ids:
-            url = f"{base_url}users/{self._mailbox_segment}/messages/{message_id}/move"
+            url = f"{base_url}users/{self._mailbox_segment}/messages/{quote(message_id, safe='')}/move"
             try:
                 response = session.post(
                     url,
@@ -311,30 +328,57 @@ class MailMessage(
         """
         Read messages (and attachments) from the configured mailbox/folder.
 
+        Does not mutate the mailbox. To mark the returned messages as read
+        and/or move them to a processed folder, assign them to ``self.input``
+        and call ``update()``.
+
         Returns:
             None
         Raises:
             ReadError: If listing messages fails.
-            UpdateError: If marking-as-read or moving processed messages fails.
         """
         messages = self._list_messages()
         self.output = self._to_dataframe(messages)
-
-        message_ids = [m["id"] for m in messages if m.get("id")]
-        if message_ids and self.settings.mark_as_read:
-            self._mark_messages_as_read(message_ids)
-        if message_ids and self.settings.move_to_processed_folder:
-            self._move_messages(message_ids, self.settings.move_to_processed_folder)
-
         logger.info(f"Read {len(self.output)} message(s) from mailbox {self.settings.mailbox}.")
 
     def create(self, **_kwargs: Any) -> NoReturn:
         raise NotSupportedError("Create operation is not supported for Mail datasets")
 
-    def update(self) -> NoReturn:
-        raise NotSupportedError(
-            "Update operation is not supported directly; use mark_as_read/move_to_processed_folder settings"
-        )
+    def update(self, **_kwargs: Any) -> None:
+        """
+        Mark messages in ``self.input`` as read and/or move them to the
+        configured processed folder, per ``settings.mark_as_read`` and
+        ``settings.move_to_processed_folder``. Messages are matched by the
+        Graph message ``id`` column, as produced by ``read()``.
+
+        A no-op when ``self.input`` is empty, or when neither action is
+        configured in settings.
+
+        Returns:
+            None
+        Raises:
+            UpdateError: If ``self.input`` is missing an ``id`` column, or if
+                marking-as-read or moving messages fails.
+        """
+        if self.input is None or self.input.empty:
+            logger.debug("Empty input provided to update(); returning without action.")
+            self.output = self.input.copy() if self.input is not None else pd.DataFrame()
+            return
+
+        if "id" not in self.input.columns:
+            raise UpdateError(
+                "self.input must include an 'id' column with Graph message ids, as produced by read().",
+                details=self.get_details(),
+            )
+
+        message_ids = [message_id for message_id in self.input["id"].tolist() if message_id]
+        if message_ids and self.settings.mark_as_read:
+            self._mark_messages_as_read(message_ids)
+        if message_ids and self.settings.move_to_processed_folder:
+            self._move_messages(message_ids, self.settings.move_to_processed_folder)
+
+        self.output = self.input.copy()
+        logger.info(f"Updated {len(message_ids)} message(s) in mailbox {self.settings.mailbox}.")
 
     def upsert(self) -> NoReturn:
         raise NotSupportedError("Upsert operation is not supported for Mail datasets")

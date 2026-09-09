@@ -498,6 +498,21 @@ class TestUpdate:
         assert len(dataset.output) == 2
         assert dataset.output is not df
 
+    def test_update_excludes_non_string_ids(
+        self, settings: MailMessageDatasetSettings, linked_service: MagicMock
+    ) -> None:
+        """A NaN id (e.g. from a filtered/reindexed DataFrame) must never reach a mailbox mutation."""
+        settings.mark_as_read = True
+        dataset = make_dataset(settings, linked_service)
+        dataset.input = pd.DataFrame({"id": ["msg-1", float("nan"), None, ""]})
+        linked_service.connection.session.patch.return_value = make_response({})
+
+        dataset.update()
+
+        linked_service.connection.session.patch.assert_called_once()
+        called_url = linked_service.connection.session.patch.call_args.args[0]
+        assert "msg-1" in called_url
+
 
 class TestUnsupportedOperations:
     @pytest.mark.parametrize("method_name", ["create", "upsert", "delete", "purge", "list", "rename"])
@@ -511,9 +526,30 @@ class TestUnsupportedOperations:
 
 
 class TestCloseAndDetails:
-    def test_close_does_not_raise(self, settings: MailMessageDatasetSettings, linked_service: MagicMock) -> None:
+    def test_close_delegates_to_linked_service(
+        self, settings: MailMessageDatasetSettings, linked_service: MagicMock
+    ) -> None:
         dataset = make_dataset(settings, linked_service)
+
+        dataset.close()
+
+        linked_service.close.assert_called_once()
+
+    def test_close_suppresses_linked_service_exceptions(
+        self, settings: MailMessageDatasetSettings, linked_service: MagicMock
+    ) -> None:
+        dataset = make_dataset(settings, linked_service)
+        linked_service.close.side_effect = RuntimeError("boom")
+
         dataset.close()  # should not raise
+
+    def test_close_is_idempotent(self, settings: MailMessageDatasetSettings, linked_service: MagicMock) -> None:
+        dataset = make_dataset(settings, linked_service)
+
+        dataset.close()
+        dataset.close()
+
+        assert linked_service.close.call_count == 2
 
     def test_get_details_returns_expected_dict(
         self, settings: MailMessageDatasetSettings, linked_service: MagicMock

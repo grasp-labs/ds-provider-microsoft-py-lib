@@ -12,6 +12,7 @@ Covers:
 - Context manager behavior
 """
 
+import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -305,3 +306,26 @@ class TestContextManager:
 
         session_mock.close.assert_called_once()
         assert service._session is None
+
+
+class TestInternalFieldsExcludedFromInitAndRepr:
+    def test_constructor_does_not_accept_internal_fields(self, settings: MailLinkedServiceSettings) -> None:
+        """_session/_credential are runtime-only; callers must not be able to set them via the constructor."""
+        service = MailLinkedService(
+            settings=settings, id=uuid.uuid4(), name="test", version="0.0.1", description="test"
+        )
+
+        assert service._session is None
+        assert service._credential is None
+
+    def test_repr_excludes_internal_fields(self, settings: MailLinkedServiceSettings) -> None:
+        service = MailLinkedService(
+            settings=settings, id=uuid.uuid4(), name="test", version="0.0.1", description="test"
+        )
+        service._session = MagicMock()
+        service._credential = MagicMock()
+
+        representation = repr(service)
+
+        assert "_session" not in representation
+        assert "_credential" not in representation

@@ -371,7 +371,9 @@ class MailMessage(
                 details=self.get_details(),
             )
 
-        message_ids = [message_id for message_id in self.input["id"].tolist() if message_id]
+        message_ids = [
+            message_id for message_id in self.input["id"].tolist() if isinstance(message_id, str) and message_id
+        ]
         if message_ids and self.settings.mark_as_read:
             self._mark_messages_as_read(message_ids)
         if message_ids and self.settings.move_to_processed_folder:
@@ -397,12 +399,17 @@ class MailMessage(
 
     def close(self) -> None:
         """
-        No need to close the linked service. Just to comply with the interface.
+        Release the connection held by the linked service.
+
+        Per contract: must be safe to call multiple times and never raise.
 
         Returns:
             None
         """
-        pass
+        try:
+            self.linked_service.close()
+        except Exception:
+            logger.debug("Exception suppressed during close().", exc_info=True)
 
     def get_details(self) -> dict[str, Any]:
         """

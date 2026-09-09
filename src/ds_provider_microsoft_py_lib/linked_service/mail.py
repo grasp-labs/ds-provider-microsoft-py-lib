@@ -86,8 +86,10 @@ class MailLinkedService(LinkedService[MailLinkedServiceSettingsType], Generic[Ma
     """
 
     settings: MailLinkedServiceSettingsType
-    _session: requests.Session | None = field(default=None, metadata={"serialize": False})
-    _credential: ClientSecretCredential | None = field(default=None, metadata={"serialize": False})
+    _session: requests.Session | None = field(default=None, init=False, repr=False, metadata={"serialize": False})
+    _credential: ClientSecretCredential | None = field(
+        default=None, init=False, repr=False, metadata={"serialize": False}
+    )
 
     def check_settings_is_set(self) -> None:
         """

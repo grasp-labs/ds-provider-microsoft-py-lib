@@ -10,8 +10,58 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 
+from ds_provider_microsoft_py_lib.dataset.mail import MailMessage, MailMessageDatasetSettings
+from ds_provider_microsoft_py_lib.dataset.mail import ReadSettings as MailReadSettings
 from ds_provider_microsoft_py_lib.dataset.mssql import MsSqlTable, MsSqlTableDatasetSettings, ReadSettings
+from ds_provider_microsoft_py_lib.linked_service.mail import MailLinkedService
 from ds_provider_microsoft_py_lib.linked_service.mssql import MsSqlLinkedService
+
+
+def create_mock_mail_linked_service(base_url: str = "https://graph.microsoft.com/v1.0/") -> MagicMock:
+    """
+    Create a mock MailLinkedService for testing.
+
+    Returns:
+        MagicMock: A mocked linked service with connection and headers configured.
+    """
+    session = MagicMock()
+    mock_service = MagicMock(spec=MailLinkedService)
+    mock_service.connection.session = session
+    mock_service.connection.base_url = base_url
+    mock_service.get_headers.return_value = {"Authorization": "Bearer test-token"}
+    return mock_service
+
+
+def create_mock_mail_dataset(
+    mailbox: str = "clients@contoso.com",
+    folder: str = "inbox",
+    linked_service: MailLinkedService | None = None,
+    **settings_kwargs: Any,
+) -> MailMessage:
+    """
+    Create a mock MailMessage dataset for testing.
+
+    Args:
+        mailbox: The mailbox address.
+        folder: The mail folder to read from.
+        linked_service: Optional linked service. If None, creates a mock one.
+        settings_kwargs: Additional MailMessageDatasetSettings overrides.
+
+    Returns:
+        MailMessage: A dataset instance ready for testing.
+    """
+    if linked_service is None:
+        linked_service = create_mock_mail_linked_service()
+
+    settings = MailMessageDatasetSettings(mailbox=mailbox, read=MailReadSettings(folder=folder), **settings_kwargs)
+    dataset = MailMessage(
+        id=uuid.uuid4(),
+        name="test-mail-dataset",
+        version="1.0.0",
+        linked_service=cast("Any", linked_service),
+        settings=settings,
+    )
+    return dataset
 
 
 def create_mock_linked_service() -> MagicMock:

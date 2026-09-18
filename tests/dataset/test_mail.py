@@ -11,10 +11,16 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 import requests
-from ds_resource_plugin_py_lib.common.resource.dataset.errors import ReadError, UpdateError
+from ds_resource_plugin_py_lib.common.resource.dataset.errors import ReadError, RenameError, UpdateError
 from ds_resource_plugin_py_lib.common.resource.errors import NotSupportedError
 
-from ds_provider_microsoft_py_lib.dataset.mail import MailMessage, MailMessageDatasetSettings
+from ds_provider_microsoft_py_lib.dataset.mail import (
+    MailMessage,
+    MailMessageDatasetSettings,
+    ReadSettings,
+    RenameSettings,
+    UpdateSettings,
+)
 from ds_provider_microsoft_py_lib.enums import ResourceType
 
 BASE_URL = "https://graph.microsoft.com/v1.0/"
@@ -22,7 +28,7 @@ BASE_URL = "https://graph.microsoft.com/v1.0/"
 
 @pytest.fixture()
 def settings() -> MailMessageDatasetSettings:
-    return MailMessageDatasetSettings(mailbox="clients@contoso.com", folder="inbox")
+    return MailMessageDatasetSettings(mailbox="clients@contoso.com")
 
 
 @pytest.fixture()
@@ -112,22 +118,22 @@ class TestBuildFilter:
     def test_build_filter_returns_none_when_no_filters(
         self, settings: MailMessageDatasetSettings, linked_service: MagicMock
     ) -> None:
-        settings.unread_only = False
+        settings.read.unread_only = False
         dataset = make_dataset(settings, linked_service)
         assert dataset._build_filter() is None
 
     def test_build_filter_combines_unread_only_and_odata_filter(
         self, settings: MailMessageDatasetSettings, linked_service: MagicMock
     ) -> None:
-        settings.odata_filter = "hasAttachments eq true"
+        settings.read.odata_filter = "hasAttachments eq true"
         dataset = make_dataset(settings, linked_service)
         assert dataset._build_filter() == "isRead eq false and (hasAttachments eq true)"
 
     def test_build_filter_with_only_odata_filter(
         self, settings: MailMessageDatasetSettings, linked_service: MagicMock
     ) -> None:
-        settings.unread_only = False
-        settings.odata_filter = "hasAttachments eq true"
+        settings.read.unread_only = False
+        settings.read.odata_filter = "hasAttachments eq true"
         dataset = make_dataset(settings, linked_service)
         assert dataset._build_filter() == "(hasAttachments eq true)"
 
@@ -144,7 +150,7 @@ class TestListMessages:
 
         assert messages == [message]
         call_kwargs = linked_service.connection.session.get.call_args.kwargs
-        assert call_kwargs["params"]["$top"] == settings.top
+        assert call_kwargs["params"]["$top"] == settings.read.top
         assert call_kwargs["params"]["$filter"] == "isRead eq false"
         assert call_kwargs["params"]["$expand"] == "attachments"
         assert call_kwargs["headers"] == {"Authorization": "Bearer test-token"}
@@ -169,7 +175,7 @@ class TestListMessages:
     def test_list_messages_stops_once_top_reached(
         self, settings: MailMessageDatasetSettings, linked_service: MagicMock
     ) -> None:
-        settings.top = 1
+        settings.read.top = 1
         dataset = make_dataset(settings, linked_service)
         first_page = make_response(
             {"value": [make_message("msg-1"), make_message("msg-2")], "@odata.nextLink": f"{BASE_URL}next-page"}
@@ -196,7 +202,7 @@ class TestListMessages:
     def test_list_messages_excludes_expand_when_attachments_disabled(
         self, settings: MailMessageDatasetSettings, linked_service: MagicMock
     ) -> None:
-        settings.include_attachments = False
+        settings.read.include_attachments = False
         dataset = make_dataset(settings, linked_service)
         linked_service.connection.session.get.return_value = make_response({"value": []})
 
@@ -247,7 +253,7 @@ class TestToDataFrame:
     def test_to_dataframe_excludes_attachments_when_disabled(
         self, settings: MailMessageDatasetSettings, linked_service: MagicMock
     ) -> None:
-        settings.include_attachments = False
+        settings.read.include_attachments = False
         dataset = make_dataset(settings, linked_service)
         message = make_message(with_attachments=True)
 
@@ -327,13 +333,13 @@ class TestResolveProcessedFolderId:
 
         assert result == "Processed"
 
-    def test_raises_update_error_on_request_failure(
+    def test_raises_rename_error_on_request_failure(
         self, settings: MailMessageDatasetSettings, linked_service: MagicMock
     ) -> None:
         dataset = make_dataset(settings, linked_service)
         linked_service.connection.session.get.side_effect = requests.RequestException("boom")
 
-        with pytest.raises(UpdateError):
+        with pytest.raises(RenameError):
             dataset._resolve_processed_folder_id("Processed")
 
     def test_escapes_single_quotes_in_folder_display_name(
@@ -361,14 +367,14 @@ class TestMoveMessages:
         first_call = linked_service.connection.session.post.call_args_list[0]
         assert first_call.kwargs["json"] == {"destinationId": "folder-id"}
 
-    def test_move_messages_raises_update_error_on_failure(
+    def test_move_messages_raises_rename_error_on_failure(
         self, settings: MailMessageDatasetSettings, linked_service: MagicMock
     ) -> None:
         dataset = make_dataset(settings, linked_service)
         dataset._processed_folder_id = "folder-id"
         linked_service.connection.session.post.side_effect = requests.RequestException("boom")
 
-        with pytest.raises(UpdateError):
+        with pytest.raises(RenameError):
             dataset._move_messages(["msg-1"], "Processed")
 
     def test_move_messages_url_encodes_message_id(
@@ -411,9 +417,9 @@ class TestRead:
     def test_read_does_not_mark_as_read_or_move(
         self, settings: MailMessageDatasetSettings, linked_service: MagicMock
     ) -> None:
-        """read() must never mutate the mailbox, regardless of mark_as_read/move settings."""
-        settings.mark_as_read = True
-        settings.move_to_processed_folder = "Processed"
+        """read() must never mutate the mailbox, regardless of update/rename settings."""
+        settings.update.mark_as_read = True
+        settings.rename.target_folder = "Processed"
         dataset = make_dataset(settings, linked_service)
         linked_service.connection.session.get.return_value = make_response({"value": [make_message("msg-1")]})
 
@@ -435,7 +441,6 @@ class TestUpdate:
         assert dataset.output is not None
         assert dataset.output.empty
         linked_service.connection.session.patch.assert_not_called()
-        linked_service.connection.session.post.assert_not_called()
 
     def test_update_raises_when_id_column_missing(
         self, settings: MailMessageDatasetSettings, linked_service: MagicMock
@@ -446,7 +451,7 @@ class TestUpdate:
         with pytest.raises(UpdateError):
             dataset.update()
 
-    def test_update_is_noop_when_neither_action_configured(
+    def test_update_is_noop_when_mark_as_read_disabled(
         self, settings: MailMessageDatasetSettings, linked_service: MagicMock
     ) -> None:
         dataset = make_dataset(settings, linked_service)
@@ -455,13 +460,12 @@ class TestUpdate:
         dataset.update()
 
         linked_service.connection.session.patch.assert_not_called()
-        linked_service.connection.session.post.assert_not_called()
         assert len(dataset.output) == 1
 
     def test_update_marks_as_read_when_enabled(
         self, settings: MailMessageDatasetSettings, linked_service: MagicMock
     ) -> None:
-        settings.mark_as_read = True
+        settings.update.mark_as_read = True
         dataset = make_dataset(settings, linked_service)
         dataset.input = pd.DataFrame({"id": ["msg-1"]})
         linked_service.connection.session.patch.return_value = make_response({})
@@ -469,21 +473,6 @@ class TestUpdate:
         dataset.update()
 
         linked_service.connection.session.patch.assert_called_once()
-
-    def test_update_moves_messages_when_processed_folder_configured(
-        self, settings: MailMessageDatasetSettings, linked_service: MagicMock
-    ) -> None:
-        settings.move_to_processed_folder = "Processed"
-        dataset = make_dataset(settings, linked_service)
-        dataset.input = pd.DataFrame({"id": ["msg-1"]})
-        linked_service.connection.session.get.return_value = make_response(
-            {"value": [{"id": "processed-folder-id"}]}
-        )
-        linked_service.connection.session.post.return_value = make_response({})
-
-        dataset.update()
-
-        linked_service.connection.session.post.assert_called_once()
 
     def test_update_populates_output_from_input(
         self, settings: MailMessageDatasetSettings, linked_service: MagicMock
@@ -502,7 +491,7 @@ class TestUpdate:
         self, settings: MailMessageDatasetSettings, linked_service: MagicMock
     ) -> None:
         """A NaN id (e.g. from a filtered/reindexed DataFrame) must never reach a mailbox mutation."""
-        settings.mark_as_read = True
+        settings.update.mark_as_read = True
         dataset = make_dataset(settings, linked_service)
         dataset.input = pd.DataFrame({"id": ["msg-1", float("nan"), None, ""]})
         linked_service.connection.session.patch.return_value = make_response({})
@@ -514,8 +503,94 @@ class TestUpdate:
         assert "msg-1" in called_url
 
 
+class TestRename:
+    def test_rename_empty_input_returns_immediately(
+        self, settings: MailMessageDatasetSettings, linked_service: MagicMock
+    ) -> None:
+        dataset = make_dataset(settings, linked_service)
+        dataset.input = pd.DataFrame()
+
+        dataset.rename()
+
+        assert dataset.output is not None
+        assert dataset.output.empty
+        linked_service.connection.session.post.assert_not_called()
+
+    def test_rename_raises_when_id_column_missing(
+        self, settings: MailMessageDatasetSettings, linked_service: MagicMock
+    ) -> None:
+        settings.rename.target_folder = "Processed"
+        dataset = make_dataset(settings, linked_service)
+        dataset.input = pd.DataFrame({"subject": ["hi"]})
+
+        with pytest.raises(RenameError):
+            dataset.rename()
+
+    def test_rename_raises_when_target_folder_not_configured(
+        self, settings: MailMessageDatasetSettings, linked_service: MagicMock
+    ) -> None:
+        dataset = make_dataset(settings, linked_service)
+        dataset.input = pd.DataFrame({"id": ["msg-1"]})
+
+        with pytest.raises(RenameError):
+            dataset.rename()
+
+    def test_rename_moves_messages_to_target_folder(
+        self, settings: MailMessageDatasetSettings, linked_service: MagicMock
+    ) -> None:
+        settings.rename.target_folder = "Processed"
+        dataset = make_dataset(settings, linked_service)
+        dataset.input = pd.DataFrame({"id": ["msg-1"]})
+        linked_service.connection.session.get.return_value = make_response(
+            {"value": [{"id": "processed-folder-id"}]}
+        )
+        linked_service.connection.session.post.return_value = make_response({})
+
+        dataset.rename()
+
+        linked_service.connection.session.post.assert_called_once()
+        assert linked_service.connection.session.post.call_args.kwargs["json"] == {
+            "destinationId": "processed-folder-id"
+        }
+
+    def test_rename_populates_output_from_input(
+        self, settings: MailMessageDatasetSettings, linked_service: MagicMock
+    ) -> None:
+        settings.rename.target_folder = "Processed"
+        dataset = make_dataset(settings, linked_service)
+        df = pd.DataFrame({"id": ["msg-1", "msg-2"]})
+        dataset.input = df
+        linked_service.connection.session.get.return_value = make_response(
+            {"value": [{"id": "processed-folder-id"}]}
+        )
+        linked_service.connection.session.post.return_value = make_response({})
+
+        dataset.rename()
+
+        assert dataset.output is not None
+        assert len(dataset.output) == 2
+        assert dataset.output is not df
+
+    def test_rename_excludes_non_string_ids(
+        self, settings: MailMessageDatasetSettings, linked_service: MagicMock
+    ) -> None:
+        settings.rename.target_folder = "Processed"
+        dataset = make_dataset(settings, linked_service)
+        dataset.input = pd.DataFrame({"id": ["msg-1", float("nan"), None, ""]})
+        linked_service.connection.session.get.return_value = make_response(
+            {"value": [{"id": "processed-folder-id"}]}
+        )
+        linked_service.connection.session.post.return_value = make_response({})
+
+        dataset.rename()
+
+        linked_service.connection.session.post.assert_called_once()
+        called_url = linked_service.connection.session.post.call_args.args[0]
+        assert "msg-1" in called_url
+
+
 class TestUnsupportedOperations:
-    @pytest.mark.parametrize("method_name", ["create", "upsert", "delete", "purge", "list", "rename"])
+    @pytest.mark.parametrize("method_name", ["create", "upsert", "delete", "purge", "list"])
     def test_unsupported_operations_raise_not_supported_error(
         self, settings: MailMessageDatasetSettings, linked_service: MagicMock, method_name: str
     ) -> None:
@@ -563,3 +638,16 @@ class TestCloseAndDetails:
             "mailbox": "clients@contoso.com",
             "folder": "inbox",
         }
+
+
+class TestSettingsStructure:
+    def test_default_settings_have_expected_defaults(self) -> None:
+        settings = MailMessageDatasetSettings(mailbox="clients@contoso.com")
+
+        assert isinstance(settings.read, ReadSettings)
+        assert isinstance(settings.update, UpdateSettings)
+        assert isinstance(settings.rename, RenameSettings)
+        assert settings.read.folder == "inbox"
+        assert settings.read.unread_only is True
+        assert settings.update.mark_as_read is False
+        assert settings.rename.target_folder is None

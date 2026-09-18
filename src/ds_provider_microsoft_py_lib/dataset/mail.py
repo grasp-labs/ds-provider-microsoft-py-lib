@@ -13,21 +13,23 @@ configured filter (by default, unread messages only), expanding attachments
 inline. It does not mutate the mailbox and is idempotent, per the dataset
 contract.
 
-Marking messages as read and/or moving them to a "processed" folder are
-separate, explicit mutations performed by ``update()``: assign the messages
-to act on (e.g. ``mail.output`` from a prior ``read()``, or a subset of it)
-to ``mail.input`` and call ``update()``. Both actions require the app
-registration to hold the Graph application permission ``Mail.ReadWrite``
-(with admin consent); read-only use only needs ``Mail.Read``.
+Marking messages as read and moving them to another folder are separate,
+explicit mutations: assign the messages to act on (e.g. ``mail.output`` from
+a prior ``read()``, or a subset of it) to ``mail.input``, then call
+``update()`` to mark them as read, or ``rename()`` to move them -- moving a
+message to a different folder is, per the dataset contract, a rename of the
+resource in the backend, not a read-time side effect or a generic update.
+Both require the app registration to hold the Graph application permission
+``Mail.ReadWrite`` (with admin consent); read-only use only needs
+``Mail.Read``.
 
 Example:
     >>> mail = MailMessage(
     ...     settings=MailMessageDatasetSettings(
     ...         mailbox="clients@contoso.com",
-    ...         folder="inbox",
-    ...         unread_only=True,
-    ...         mark_as_read=True,
-    ...         move_to_processed_folder="Processed",
+    ...         read=ReadSettings(folder="inbox", unread_only=True),
+    ...         update=UpdateSettings(mark_as_read=True),
+    ...         rename=RenameSettings(target_folder="Processed"),
     ...     ),
     ...     linked_service=MailLinkedService(
     ...         settings=MailLinkedServiceSettings(
@@ -48,8 +50,9 @@ Example:
     >>> mail.read()
     >>> messages = mail.output  # pandas DataFrame, one row per message
     >>> messages.iloc[0]["attachments"]  # list[dict] with base64 content_bytes
-    >>> mail.input = messages  # mark as read and move, per settings above
-    >>> mail.update()
+    >>> mail.input = messages
+    >>> mail.update()  # mark as read, per settings.update
+    >>> mail.rename()  # move to settings.rename.target_folder
 """
 
 from dataclasses import dataclass, field
@@ -59,8 +62,9 @@ from urllib.parse import quote
 import pandas as pd
 import requests
 from ds_common_logger_py_lib import Logger
+from ds_common_serde_py_lib import Serializable
 from ds_resource_plugin_py_lib.common.resource.dataset import DatasetSettings, DatasetStorageFormatType, TabularDataset
-from ds_resource_plugin_py_lib.common.resource.dataset.errors import ReadError, UpdateError
+from ds_resource_plugin_py_lib.common.resource.dataset.errors import ReadError, RenameError, UpdateError
 from ds_resource_plugin_py_lib.common.resource.errors import NotSupportedError
 from ds_resource_plugin_py_lib.common.serde.deserialize import PandasDeserializer
 from ds_resource_plugin_py_lib.common.serde.serialize import PandasSerializer
@@ -74,13 +78,11 @@ REQUEST_TIMEOUT_SECONDS = 30
 
 
 @dataclass(kw_only=True)
-class MailMessageDatasetSettings(DatasetSettings):
+class ReadSettings(Serializable):
     """
-    Settings for reading messages from a mailbox via Microsoft Graph.
+    Settings specific to the read() operation.
     """
 
-    mailbox: str
-    """User principal name or shared-mailbox address to read from, e.g. 'clients@contoso.com'."""
     folder: str = "inbox"
     """Well-known folder name (e.g. 'inbox') or a mailFolder id to read messages from."""
     unread_only: bool = True
@@ -91,11 +93,45 @@ class MailMessageDatasetSettings(DatasetSettings):
     """Maximum number of messages to return per read() call."""
     include_attachments: bool = True
     """If True, file attachments are expanded inline as base64 content."""
+
+
+@dataclass(kw_only=True)
+class UpdateSettings(Serializable):
+    """
+    Settings specific to the update() operation.
+    """
+
     mark_as_read: bool = False
-    """If True, messages passed to update() via self.input are marked isRead=true. Requires Mail.ReadWrite."""
-    move_to_processed_folder: str | None = None
-    """If set, messages passed to update() via self.input are moved to this folder (display name or id).
-    Requires Mail.ReadWrite."""
+    """If True, messages in self.input are marked isRead=true. Requires Mail.ReadWrite."""
+
+
+@dataclass(kw_only=True)
+class RenameSettings(Serializable):
+    """
+    Settings specific to the rename() operation.
+    """
+
+    target_folder: str | None = None
+    """Folder (display name or id) that messages in self.input are moved to. Requires Mail.ReadWrite."""
+
+
+@dataclass(kw_only=True)
+class MailMessageDatasetSettings(DatasetSettings):
+    """
+    Settings for reading messages from a mailbox via Microsoft Graph.
+    """
+
+    mailbox: str
+    """User principal name or shared-mailbox address to operate on, e.g. 'clients@contoso.com'."""
+
+    read: ReadSettings = field(default_factory=ReadSettings)
+    """Settings for read()."""
+
+    update: UpdateSettings = field(default_factory=UpdateSettings)
+    """Settings for update()."""
+
+    rename: RenameSettings = field(default_factory=RenameSettings)
+    """Settings for rename()."""
 
 
 MailMessageDatasetSettingsType = TypeVar(
@@ -147,15 +183,15 @@ class MailMessage(
     @property
     def _messages_url(self) -> str:
         base_url = self.linked_service.connection.base_url
-        folder = quote(self.settings.folder, safe="")
+        folder = quote(self.settings.read.folder, safe="")
         return f"{base_url}users/{self._mailbox_segment}/mailFolders/{folder}/messages"
 
     def _build_filter(self) -> str | None:
         clauses = []
-        if self.settings.unread_only:
+        if self.settings.read.unread_only:
             clauses.append("isRead eq false")
-        if self.settings.odata_filter:
-            clauses.append(f"({self.settings.odata_filter})")
+        if self.settings.read.odata_filter:
+            clauses.append(f"({self.settings.read.odata_filter})")
         return " and ".join(clauses) if clauses else None
 
     def _list_messages(self) -> list[dict[str, Any]]:
@@ -170,18 +206,18 @@ class MailMessage(
         session: requests.Session = self.linked_service.connection.session
         first_url = self._messages_url
         params: dict[str, Any] = {
-            "$top": self.settings.top,
+            "$top": self.settings.read.top,
             "$orderby": "receivedDateTime asc",
         }
         odata_filter = self._build_filter()
         if odata_filter:
             params["$filter"] = odata_filter
-        if self.settings.include_attachments:
+        if self.settings.read.include_attachments:
             params["$expand"] = "attachments"
 
         messages: list[dict[str, Any]] = []
         url: str | None = first_url
-        while url and len(messages) < self.settings.top:
+        while url and len(messages) < self.settings.read.top:
             try:
                 response = session.get(
                     url,
@@ -202,7 +238,7 @@ class MailMessage(
             messages.extend(payload.get("value", []))
             url = payload.get("@odata.nextLink")
 
-        return messages[: self.settings.top]
+        return messages[: self.settings.read.top]
 
     @staticmethod
     def _extract_attachments(message: dict[str, Any]) -> list[dict[str, Any]]:
@@ -240,7 +276,9 @@ class MailMessage(
                     "body_preview": message.get("bodyPreview"),
                     "body_content": body.get("content"),
                     "body_content_type": body.get("contentType"),
-                    "attachments": self._extract_attachments(message) if self.settings.include_attachments else [],
+                    "attachments": self._extract_attachments(message)
+                    if self.settings.read.include_attachments
+                    else [],
                 }
             )
         return pd.DataFrame(rows)
@@ -257,6 +295,19 @@ class MailMessage(
             str: The value with embedded single quotes doubled.
         """
         return value.replace("'", "''")
+
+    @staticmethod
+    def _message_ids_from_input(input_df: pd.DataFrame) -> list[str]:
+        """
+        Extract well-formed Graph message ids from an input DataFrame's `id` column.
+
+        Excludes NaN/None and non-string values, which pandas would otherwise
+        treat as truthy and let flow into a mailbox mutation.
+
+        Returns:
+            list[str]: Non-empty string message ids.
+        """
+        return [message_id for message_id in input_df["id"].tolist() if isinstance(message_id, str) and message_id]
 
     def _mark_messages_as_read(self, message_ids: list[str]) -> None:
         session: requests.Session = self.linked_service.connection.session
@@ -294,7 +345,7 @@ class MailMessage(
             response.raise_for_status()
         except requests.RequestException as exc:
             logger.error(f"Failed to resolve mail folder '{display_name_or_id}': {exc!s}")
-            raise UpdateError(
+            raise RenameError(
                 f"Failed to resolve mail folder '{display_name_or_id}': {exc!s}", details=self.get_details()
             ) from exc
 
@@ -320,7 +371,7 @@ class MailMessage(
                 response.raise_for_status()
             except requests.RequestException as exc:
                 logger.error(f"Failed to move message {message_id} to '{destination}': {exc!s}")
-                raise UpdateError(
+                raise RenameError(
                     f"Failed to move message {message_id} to '{destination}': {exc!s}", details=self.get_details()
                 ) from exc
 
@@ -328,9 +379,9 @@ class MailMessage(
         """
         Read messages (and attachments) from the configured mailbox/folder.
 
-        Does not mutate the mailbox. To mark the returned messages as read
-        and/or move them to a processed folder, assign them to ``self.input``
-        and call ``update()``.
+        Does not mutate the mailbox. To mark the returned messages as read,
+        assign them to ``self.input`` and call ``update()``; to move them to
+        another folder, call ``rename()`` instead.
 
         Returns:
             None
@@ -346,19 +397,17 @@ class MailMessage(
 
     def update(self, **_kwargs: Any) -> None:
         """
-        Mark messages in ``self.input`` as read and/or move them to the
-        configured processed folder, per ``settings.mark_as_read`` and
-        ``settings.move_to_processed_folder``. Messages are matched by the
-        Graph message ``id`` column, as produced by ``read()``.
+        Mark messages in ``self.input`` as read, per ``settings.update.mark_as_read``.
+        Messages are matched by the Graph message ``id`` column, as produced
+        by ``read()``.
 
-        A no-op when ``self.input`` is empty, or when neither action is
-        configured in settings.
+        A no-op when ``self.input`` is empty, or when ``mark_as_read`` is disabled.
 
         Returns:
             None
         Raises:
             UpdateError: If ``self.input`` is missing an ``id`` column, or if
-                marking-as-read or moving messages fails.
+                marking messages as read fails.
         """
         if self.input is None or self.input.empty:
             logger.debug("Empty input provided to update(); returning without action.")
@@ -371,13 +420,9 @@ class MailMessage(
                 details=self.get_details(),
             )
 
-        message_ids = [
-            message_id for message_id in self.input["id"].tolist() if isinstance(message_id, str) and message_id
-        ]
-        if message_ids and self.settings.mark_as_read:
+        message_ids = self._message_ids_from_input(self.input)
+        if message_ids and self.settings.update.mark_as_read:
             self._mark_messages_as_read(message_ids)
-        if message_ids and self.settings.move_to_processed_folder:
-            self._move_messages(message_ids, self.settings.move_to_processed_folder)
 
         self.output = self.input.copy()
         logger.info(f"Updated {len(message_ids)} message(s) in mailbox {self.settings.mailbox}.")
@@ -394,8 +439,48 @@ class MailMessage(
     def list(self) -> NoReturn:
         raise NotSupportedError("List operation is not supported for Mail datasets; use read() instead")
 
-    def rename(self) -> NoReturn:
-        raise NotSupportedError("Rename operation is not supported for Mail datasets")
+    def rename(self, **_kwargs: Any) -> None:
+        """
+        Move messages in ``self.input`` to ``settings.rename.target_folder``.
+        Messages are matched by the Graph message ``id`` column, as produced
+        by ``read()``.
+
+        A no-op when ``self.input`` is empty. Not idempotent: calling this
+        again with the same input after a successful move will fail, since
+        the messages are no longer in their original location.
+
+        Returns:
+            None
+        Raises:
+            RenameError: If ``self.input`` is missing an ``id`` column,
+                ``settings.rename.target_folder`` is not set, or moving
+                messages fails.
+        """
+        if self.input is None or self.input.empty:
+            logger.debug("Empty input provided to rename(); returning without action.")
+            self.output = self.input.copy() if self.input is not None else pd.DataFrame()
+            return
+
+        if "id" not in self.input.columns:
+            raise RenameError(
+                "self.input must include an 'id' column with Graph message ids, as produced by read().",
+                details=self.get_details(),
+            )
+        if not self.settings.rename.target_folder:
+            raise RenameError(
+                "settings.rename.target_folder must be set to move messages.",
+                details=self.get_details(),
+            )
+
+        message_ids = self._message_ids_from_input(self.input)
+        if message_ids:
+            self._move_messages(message_ids, self.settings.rename.target_folder)
+
+        self.output = self.input.copy()
+        logger.info(
+            f"Moved {len(message_ids)} message(s) in mailbox {self.settings.mailbox} "
+            f"to '{self.settings.rename.target_folder}'."
+        )
 
     def close(self) -> None:
         """
@@ -421,5 +506,5 @@ class MailMessage(
         return {
             "type": self.type.value,
             "mailbox": self.settings.mailbox,
-            "folder": self.settings.folder,
+            "folder": self.settings.read.folder,
         }

@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 import pandas as pd
 
 from ds_provider_microsoft_py_lib.dataset.mail import MailMessage, MailMessageDatasetSettings
+from ds_provider_microsoft_py_lib.dataset.mail import ReadSettings as MailReadSettings
 from ds_provider_microsoft_py_lib.dataset.mssql import MsSqlTable, MsSqlTableDatasetSettings, ReadSettings
 from ds_provider_microsoft_py_lib.linked_service.mail import MailLinkedService
 from ds_provider_microsoft_py_lib.linked_service.mssql import MsSqlLinkedService
@@ -52,7 +53,7 @@ def create_mock_mail_dataset(
     if linked_service is None:
         linked_service = create_mock_mail_linked_service()
 
-    settings = MailMessageDatasetSettings(mailbox=mailbox, folder=folder, **settings_kwargs)
+    settings = MailMessageDatasetSettings(mailbox=mailbox, read=MailReadSettings(folder=folder), **settings_kwargs)
     dataset = MailMessage(
         id=uuid.uuid4(),
         name="test-mail-dataset",
